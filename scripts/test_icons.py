@@ -28,6 +28,7 @@ ICONS = {
     "emoticon": "emoticon-outline.svg",
     "views": "eye-outline.svg",
     "comments": "comment-text-outline.svg",
+    "markdown": "language-markdown.svg",
 }
 
 

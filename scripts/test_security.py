@@ -4,7 +4,9 @@ Three things a deployment depends on, none of which are visible from the docs:
 
 * ``client_ip`` must ignore ``X-Forwarded-For`` unless the operator opted in —
   otherwise any visitor can choose their own identity, and with it their rate
-  limit and their ``ip-…`` visitor id;
+  limit and their visitor id;
+* an identity must be derived from the address **and nothing else**, so one
+  address cannot present several identities;
 * the limiter must stay bounded in memory, because it keeps one bucket per
   client address and it runs for months;
 * delete tokens are compared by hash, and an empty token or an empty stored hash
@@ -28,6 +30,7 @@ from security import (  # noqa: E402
     client_ip,
     hash_token,
     make_visitor_id,
+    owns_row,
     verify_token,
 )
 from settings import Settings  # noqa: E402
@@ -79,16 +82,52 @@ def test_forwarded_headers_need_opt_in() -> None:
     check("没有对端信息时兜底", client_ip(FakeRequest({}, peer=None), on) == "0.0.0.0")
 
 
-def test_visitor_id_is_stable_and_shared() -> None:
-    print("--- 访客 ID 的推导")
-    first = make_visitor_id("10.0.0.9", "Mozilla/5.0")
-    check("同一 IP + UA 得到同一 ID", make_visitor_id("10.0.0.9", "Mozilla/5.0") == first)
-    check("UA 变化后 ID 变化", make_visitor_id("10.0.0.9", "curl/8") != first)
-    check("IP 变化后 ID 变化", make_visitor_id("10.0.0.10", "Mozilla/5.0") != first)
-    # The prefix is load-bearing: `Database._remember_visitor` refuses to store a
-    # nickname against such an id, precisely because it is not per-browser.
-    check("带 ip- 前缀，便于识别共享身份", first.startswith("ip-"), first)
+def test_visitor_id_is_the_address() -> None:
+    print("--- 身份由地址唯一决定")
+    first = make_visitor_id("10.0.0.9")
+    check("同一地址得到同一身份", make_visitor_id("10.0.0.9") == first)
+    check("不同地址得到不同身份", make_visitor_id("10.0.0.10") != first)
+    # The whole point of the rule: one address is one visitor, so nothing else
+    # may influence the id. A user agent, a device fingerprint or a
+    # client-supplied value would all let one address present several
+    # identities — which is what this replaced. Asserted on the signature so
+    # adding such a parameter cannot pass unnoticed.
+    check("只接收地址一个参数", make_visitor_id.__code__.co_argcount == 1,
+          f"arity={make_visitor_id.__code__.co_argcount}")
+    check("参数就是地址", make_visitor_id.__code__.co_varnames[0] == "ip",
+          make_visitor_id.__code__.co_varnames[0])
+    # Marked, so a raw value in the database is readable at a glance.
+    check("带 ip- 前缀", first.startswith("ip-"), first)
     check("长度固定", len(first) == 3 + 24, str(len(first)))
+    check("不含原始地址", "10.0.0.9" not in first, first)
+
+
+def test_ownership_is_the_address() -> None:
+    print("--- 归属由地址判定，昵称不参与")
+    written = "203.0.113.7"
+    row = {"client_ip": written, "author": "小明"}
+
+    check("同一地址算自己的", owns_row(row, make_visitor_id(written)) is True)
+    check("别的地址不算", owns_row(row, make_visitor_id("203.0.113.8")) is False)
+    check("空来源不算", owns_row({"client_ip": "", "author": "小明"}, make_visitor_id(written)) is False)
+    check("没有身份不算", owns_row(row, "") is False)
+    check("缺列不算", owns_row({}, make_visitor_id(written)) is False)
+
+    # The requirement, stated as a test: whatever the row is *called* has no
+    # bearing on whether its author may delete it. A name is self-declared, so
+    # a name that granted deletion would grant it to whoever read it off the
+    # page — and a name that denied it would lock the real author out of their
+    # own comment just because they typed it in differently.
+    mine = make_visitor_id(written)
+    for name in ("小明", "管理员", "匿名用户", "", "Someone Else", "admin"):
+        check(
+            f"作者写成 {name!r} 不影响判定",
+            owns_row({"client_ip": written, "author": name}, mine) is True,
+        )
+    check(
+        "换个名字也不会把别人的评论变成自己的",
+        owns_row({"client_ip": written, "author": "小明"}, make_visitor_id("198.51.100.4")) is False,
+    )
 
 
 def test_delete_tokens() -> None:
@@ -168,7 +207,9 @@ def test_limiter_memory_is_bounded() -> None:
 def main() -> int:
     test_forwarded_headers_need_opt_in()
     print()
-    test_visitor_id_is_stable_and_shared()
+    test_visitor_id_is_the_address()
+    print()
+    test_ownership_is_the_address()
     print()
     test_delete_tokens()
     print()

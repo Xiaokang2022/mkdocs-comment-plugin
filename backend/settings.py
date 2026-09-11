@@ -16,7 +16,7 @@ from typing import Any, List, Sequence
 
 BASE_DIR = Path(__file__).resolve().parent
 
-DEFAULT_REACTIONS: List[str] = ["👍", "❤️", "😄", "🎉", "🚀"]
+DEFAULT_REACTIONS: List[str] = ["👍", "❤️", "😄", "🎉", "🚀", "👀"]
 
 # What a commenter who leaves the nickname box empty is called. Shown in the
 # widget, in the `@mention` a reply quotes, and in the hover tooltip, so it is
@@ -233,10 +233,13 @@ class Settings:
 
     # --- identity ------------------------------------------------------
     anonymous_name: str = DEFAULT_ANONYMOUS_NAME
-    # Who gets their address printed next to the name: "anonymous" | "always"
-    # | "never". The address is never used *as* a name, so hiding it here really
-    # does hide it.
-    show_author_ip: str = "anonymous"
+    # Who gets their address printed next to the name: "always" | "anonymous"
+    # | "never". Defaults to everyone, because that is the only setting under
+    # which a named commenter and an anonymous one are distinguishable at a
+    # glance, and because an address is the only identity a reader can actually
+    # check. The address is never used *as* a name, so "never" really does hide
+    # it — nothing to migrate.
+    show_author_ip: str = "always"
 
     # --- rendering -----------------------------------------------------
     # Kept in step with the site's `markdown_extensions` so a preview and a
@@ -271,7 +274,7 @@ class Settings:
             emoji_picker=_env_list("MKC_EMOJI_PICKER", DEFAULT_EMOJI_PICKER),
             anonymous_name=_env_str("MKC_ANONYMOUS_NAME", DEFAULT_ANONYMOUS_NAME),
             show_author_ip=_env_choice(
-                "MKC_SHOW_AUTHOR_IP", "anonymous", ("anonymous", "always", "never")
+                "MKC_SHOW_AUTHOR_IP", "always", ("anonymous", "always", "never")
             ),
             markdown_extensions=_env_markdown_extensions(
                 "MKC_MARKDOWN_EXTENSIONS", DEFAULT_MARKDOWN_EXTENSIONS
@@ -306,7 +309,11 @@ class Settings:
         return author == self.anonymous_name
 
     def shows_author_ip(self, is_anonymous: bool) -> bool:
-        """Whether this commenter's address is published beside the name."""
+        """Whether this commenter's address is published beside the name.
+
+        `is_anonymous` only matters for the middle setting: on "always" (the
+        default) it is ignored, on "never" the field is not even sent.
+        """
         if self.show_author_ip == "never":
             return False
         if self.show_author_ip == "always":

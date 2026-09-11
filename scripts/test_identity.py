@@ -48,13 +48,14 @@ def _settings(**overrides) -> Settings:
 
 
 def test_anonymous_is_the_default() -> None:
-    print("--- 默认：匿名名字，不暴露地址")
+    print("--- 默认：匿名名字，地址对所有人可见")
     s = _settings()
     check("留空得到匿名名字", s.display_author("", IP) == "匿名用户", s.display_author("", IP))
     check("不是 IP", s.display_author("", IP) != IP)
     check("被识别为匿名", s.is_anonymous(s.display_author("", IP)))
-    check("默认只在匿名时显示 IP", s.shows_author_ip(True) is True)
-    check("已署名时不显示 IP", s.shows_author_ip(False) is False)
+    # The default is everyone: an address is the only thing a reader can check.
+    check("默认对匿名显示 IP", s.shows_author_ip(True) is True)
+    check("默认对已署名也显示 IP", s.shows_author_ip(False) is True)
     check("不预填昵称框", s.suggested_author(IP) == "", repr(s.suggested_author(IP)))
     check("空白字符也算留空", s.display_author("   ", IP) == "匿名用户")
     check("默认匿名名字可读且有内容", bool(DEFAULT_ANONYMOUS_NAME.strip()))
@@ -83,7 +84,7 @@ def test_fixed_default_nickname() -> None:
     s = _settings(default_author="站内读者")
     check("留空时用固定昵称", s.display_author("", IP) == "站内读者")
     check("它不是匿名占位", s.is_anonymous("站内读者") is False)
-    check("此时不显示 IP", s.shows_author_ip(False) is False)
+    check("默认仍会显示 IP", s.shows_author_ip(False) is True)
     # A literal default is a real name the operator chose, so pre-filling it is
     # the intended behaviour rather than the accident it is in the anonymous mode.
     check("会预填昵称框", s.suggested_author(IP) == "站内读者")
@@ -95,9 +96,10 @@ def test_legacy_ip_mode() -> None:
     check("留空得到 IP", s.display_author("", IP) == IP)
     check("预填 IP", s.suggested_author(IP) == IP)
     check("IP 名字不算匿名占位", s.is_anonymous(IP) is False)
-    # Not anonymous, so the default policy would withhold the badge — which is
-    # right, because the name already is the address.
-    check("默认不再重复显示地址", s.shows_author_ip(False) is False)
+    # The flag is on, but the badge would be the same string twice — the frontend
+    # drops it in that case, so nothing duplicates on screen.
+    check("策略仍是显示", s.shows_author_ip(False) is True)
+    check("但名字已经等于地址（前端不再重复渲染）", s.display_author("", IP) == IP)
 
 
 def test_ip_visibility_policies() -> None:
@@ -117,6 +119,24 @@ def test_ip_visibility_policies() -> None:
     check("anonymous：只对匿名显示", anonymous.shows_author_ip(True) and not anonymous.shows_author_ip(False))
 
 
+def test_the_default_policy_is_everyone() -> None:
+    print("--- 默认策略就是「所有人」")
+    # Spelled out separately from the class default so that a change to either
+    # the dataclass field or the environment fallback is caught here.
+    import settings as settings_module
+
+    import os
+
+    os.environ.pop("MKC_SHOW_AUTHOR_IP", None)
+    chosen = settings_module._env_choice(
+        "MKC_SHOW_AUTHOR_IP", "always", ("anonymous", "always", "never")
+    )
+    check("环境变量缺省时取 always", chosen == "always", chosen)
+    check("类默认值也是 always",
+          settings_module.Settings(anonymous_name=settings_module.DEFAULT_ANONYMOUS_NAME)
+          .shows_author_ip(False) is True)
+
+
 def test_bad_configuration_is_loud() -> None:
     print("--- 非法取值直接报错")
     import os
@@ -126,7 +146,7 @@ def test_bad_configuration_is_loud() -> None:
     for value, ok in (("always", True), ("NEVER", True), ("anonymous", True), ("sometimes", False), ("", True)):
         os.environ["MKC_SHOW_AUTHOR_IP"] = value
         try:
-            settings_module._env_choice("MKC_SHOW_AUTHOR_IP", "anonymous", ("anonymous", "always", "never"))
+            settings_module._env_choice("MKC_SHOW_AUTHOR_IP", "always", ("anonymous", "always", "never"))
             raised = False
         except ValueError:
             raised = True
@@ -134,7 +154,7 @@ def test_bad_configuration_is_loud() -> None:
     # `_env_choice` lower-cases, so an upper-case setting file still works.
     os.environ["MKC_SHOW_AUTHOR_IP"] = "NEVER"
     check("大小写不敏感",
-          settings_module._env_choice("MKC_SHOW_AUTHOR_IP", "anonymous", ("anonymous", "always", "never")) == "never")
+          settings_module._env_choice("MKC_SHOW_AUTHOR_IP", "always", ("anonymous", "always", "never")) == "never")
     os.environ.pop("MKC_SHOW_AUTHOR_IP", None)
 
 
@@ -150,6 +170,8 @@ def main() -> int:
     test_legacy_ip_mode()
     print()
     test_ip_visibility_policies()
+    print()
+    test_the_default_policy_is_everyone()
     print()
     test_bad_configuration_is_loud()
 

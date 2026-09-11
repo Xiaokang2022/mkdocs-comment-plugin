@@ -1,4 +1,4 @@
-"""Small security helpers: client IP resolution, hashing and rate limiting."""
+"""Small security helpers: client IP resolution, identity, hashing and rate limiting."""
 
 from __future__ import annotations
 
@@ -13,6 +13,12 @@ from typing import Deque, Dict
 from fastapi import HTTPException, Request, status
 
 from settings import Settings
+
+# Marks an id this module derived from an address rather than one a client
+# supplied. Purely diagnostic now that the derivation is mandatory — it is what
+# makes a value in the database readable at a glance — but it also lets a test
+# state the rule as "the id depends on the address and nothing else".
+IP_VISITOR_PREFIX = "ip-"
 
 
 def client_ip(request: Request, settings: Settings) -> str:
@@ -35,10 +41,41 @@ def client_ip(request: Request, settings: Settings) -> str:
     return "0.0.0.0"
 
 
-def make_visitor_id(ip: str, user_agent: str) -> str:
-    """Deterministic fallback identity when the client sends no visitor id."""
-    digest = hashlib.sha256(f"{ip}|{user_agent}".encode("utf-8")).hexdigest()
-    return f"ip-{digest[:24]}"
+def make_visitor_id(ip: str) -> str:
+    """The identity of a reader, derived from their address and nothing else.
+
+    One address is one visitor. That is the whole point: the same person on a
+    phone, a laptop and a private window is one visitor, and a reader who clears
+    their storage keeps the reactions they already left. The mirror image is
+    that everyone behind one address — an office NAT, a campus network, a VPN —
+    is also one visitor, so they share their reaction slots and their view of
+    "which ones are mine".
+
+    Deliberately not salted with the user agent, and deliberately not combined
+    with a client-supplied id: either one would let a single address present
+    several identities, which is the behaviour this replaced.
+    """
+    digest = hashlib.sha256(ip.encode("utf-8")).hexdigest()
+    return f"{IP_VISITOR_PREFIX}{digest[:24]}"
+
+
+def owns_row(row: Dict[str, str], visitor: str) -> bool:
+    """Whether a stored row was written by this visitor.
+
+    Ownership is an address comparison and nothing else — the same rule that
+    decides whose reaction counts as "mine". The nickname is deliberately not
+    consulted: names are self-declared, nothing stops two readers from choosing
+    the same one, and a name that granted deletion would hand the right to
+    anyone who read it off the page.
+
+    Lives here rather than in the request layer so the rule can be tested
+    without an HTTP request, which is also how "the name is irrelevant" gets
+    pinned down.
+    """
+    written_from = (row or {}).get("client_ip") or ""
+    if not written_from or not visitor:
+        return False
+    return visitor == make_visitor_id(written_from)
 
 
 def new_delete_token() -> str:

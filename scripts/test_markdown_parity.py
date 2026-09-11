@@ -6,8 +6,8 @@ equal. This test reads ``demo/mkdocs.yml``, compares it with the backend's
 default extension set, and fails on drift — including drift introduced by
 editing only one of the two.
 
-It also pins the one deliberate deviation (no permalink `¶` on comment
-headings) so it cannot quietly grow into several.
+It also pins the deliberate deviations (no permalink `¶` on comment headings,
+and no front-matter parsing) so they cannot quietly grow into several.
 
 Run directly (``python scripts/test_markdown_parity.py``) or with pytest.
 """
@@ -31,6 +31,13 @@ DEMO_CONFIG = ROOT / "demo" / "mkdocs.yml"
 # not listed here must match exactly.
 DOCUMENTED_DEVIATIONS = {
     "toc": "评论标题不需要 ¶ 永久链接，它会把页面锚点指向评论内部",
+}
+
+# Extensions the site needs but a comment renderer must not have. They are
+# dropped from the site list before comparing, and their absence from the
+# backend is asserted separately.
+SITE_ONLY = {
+    "meta": "站点用它读页面元数据；评论正文若以 --- 开头会被当前言吞掉",
 }
 
 
@@ -67,19 +74,28 @@ def main() -> int:
     backend = DEFAULT_MARKDOWN_EXTENSIONS
     site_names = _names(site)
     backend_names = _names(backend)
+    shared_names = [name for name in site_names if name not in SITE_ONLY]
 
     print("--- 扩展名集合")
     check("demo 的每一项都能被识别", bool(site_names), f"读到的内容：{site!r}")
     check(
-        "与 demo/mkdocs.yml 的 markdown_extensions 完全一致",
-        site_names == backend_names,
-        f"site   : {site_names}\n         backend: {backend_names}",
+        "与 demo/mkdocs.yml 的 markdown_extensions 一致（除去站点专属扩展）",
+        shared_names == backend_names,
+        f"site   : {shared_names}\n         backend: {backend_names}",
     )
     check(
         "顺序也一致（顺序影响扩展优先级）",
-        site_names == backend_names,
-        f"site   : {site_names}\n         backend: {backend_names}",
+        shared_names == backend_names,
+        f"site   : {shared_names}\n         backend: {backend_names}",
     )
+
+    print("--- 站点专属扩展没有混进渲染器")
+    for name, reason in SITE_ONLY.items():
+        check(
+            f"{name} 不在后端（{reason}）",
+            name not in backend_names,
+            f"{name} 在站点配置里是必要的，但会改变评论正文的渲染结果",
+        )
 
     print("--- 有意的差异只有一处")
     differing = [
@@ -106,6 +122,19 @@ def main() -> int:
             unwanted not in backend_names,
             f"{unwanted} 会改变换行/列表编号，导致预览与站点不一致",
         )
+
+    # The concrete harm `meta` would do here: a comment that happens to open
+    # with a horizontal rule is a normal comment, not a document with front
+    # matter, and its text must survive.
+    with_meta = markdown_render.render_markdown("---\ntitle: hi\n---\n正文")
+    markdown_render.configure(site_names)
+    try:
+        with_meta_site_style = markdown_render.render_markdown("---\ntitle: hi\n---\n正文")
+    finally:
+        markdown_render.configure()
+    check("演示：开启 meta 会吞掉开头的 --- 区块", "title" not in with_meta_site_style,
+          with_meta_site_style)
+    check("默认配置下正文完整保留", "正文" in with_meta and "title" in with_meta, with_meta)
 
     print("--- 每一项都能真正加载")
     try:

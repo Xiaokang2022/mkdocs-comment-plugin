@@ -229,7 +229,11 @@ button.md-comment__reaction:not(.is-active):hover {
      than pushing the composer taller. */
   position: relative;
   display: flex;
-  flex-wrap: wrap;
+  /* Never wraps. A reply box is narrower than the composer, and wrapping put
+     the buttons on a second row — which made the same control bar look like
+     two different things depending on where it appeared. Instead the identity
+     chip absorbs all the slack and shrinks, so the row always fits. */
+  flex-wrap: nowrap;
   align-items: center;
   gap: 0.3rem;
   padding-top: 0.4rem;
@@ -239,13 +243,18 @@ button.md-comment__reaction:not(.is-active):hover {
 /* A chip rather than an underline: at this size an underlined box reads as
    uneditable body text rather than a field. */
 /* A filled chip, not a panel: the pill shape is what marks it as an editable
-   inline control rather than a boxed field. */
+   inline control rather than a boxed field.
+
+   It takes whatever width the bar has left and gives it up first, so a narrow
+   reply box keeps every control on one line: the buttons keep their size and
+   the chip — whose content is a nickname, and therefore elastic — absorbs the
+   difference. `flex-shrink` matters more than the basis here. */
 .md-comment__identity {
   display: inline-flex;
-  flex: 0 1 15rem;
+  flex: 1 1 8rem;
   align-items: center;
   gap: 0.35rem;
-  min-width: 0;
+  min-width: 3.5rem;
   height: 1.6rem;
   padding: 0 0.55rem;
   border: 0.05rem solid transparent;
@@ -262,19 +271,32 @@ button.md-comment__reaction:not(.is-active):hover {
   border-color: var(--mkc-primary);
 }
 
+/* The '昵称' caption is the first thing to go when space runs out: the chip is
+   still recognisable as a field (placeholder, pill, focus ring), and a squeezed
+   caption reads worse than none. The placeholder says the same thing. */
 .md-comment__label {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   color: var(--mkc-fg-lighter);
   font-size: 0.62rem;
   font-weight: 600;
   letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-/* Carries no border of its own — the chip around it is the affordance. */
+/* Carries no border of its own — the chip around it is the affordance.
+
+   The flex basis is 0, not `auto`/`100%`. With a basis of the chip's full
+   width the field's shrink weight dwarfed the caption's, and the ~1px of
+   leftover shrinkage it was charged for was enough to clip a glyph — "昵称"
+   rendered as "昵" with a sliver of the second one. Growing from zero means
+   the field only ever takes leftover space, so the caption keeps its width
+   until the chip genuinely cannot fit it. */
 .md-comment__field {
   display: block;
-  flex: 1 1 auto;
-  width: 100%;
+  flex: 1 1 0;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -304,18 +326,29 @@ button.md-comment__reaction:not(.is-active):hover {
   border-color: var(--mkc-danger);
 }
 
-.md-comment__spacer {
-  flex: 1 1 auto;
-}
-
 .md-comment__hint {
+  /* Shrinks before the identity does, and clips rather than wrapping: a
+     validation message is short, and letting it wrap would push the buttons
+     onto another line and undo the point of the nowrap bar. */
+  flex: 0 1 auto;
+  min-width: 0;
   color: var(--mkc-fg-lighter);
   font-size: 0.62rem;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* An error is the one thing in the bar that must be readable, so it keeps its
+   space and the identity chip yields instead. */
 .md-comment__hint--error {
+  flex: 0 0 auto;
   color: var(--mkc-danger);
+}
+
+.md-comment__hint--error::before {
+  content: "⚠";
+  margin-right: 0.25rem;
 }
 
 /* The composer's emoji trigger is the same ghost icon a comment uses, so the
@@ -634,6 +667,80 @@ button.md-comment__reaction:not(.is-active):hover {
   margin-right: 0.35rem;
 }
 
+/* The Markdown-source toggle, parked at the far end of the meta row so it sits
+   in the comment's top-right corner.
+
+   `margin-left: auto` rather than ordering tricks: the meta line is a wrapping
+   flex row whose members are all different widths, and pushing this one to the
+   edge is exactly what `auto` means — including after it wraps onto a line of
+   its own, where it stays right-aligned instead of jumping back to the left.
+
+   Kept to the same weight as the timestamp: it is a reading aid, and the very
+   first thing that would go wrong is it competing with the author name. */
+.md-comment__source-toggle {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--mkc-radius-sm);
+  background: none;
+  color: var(--mkc-fg-lighter);
+  cursor: pointer;
+  transition: background-color 125ms, color 125ms;
+}
+
+.md-comment__source-toggle svg {
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.md-comment__source-toggle:hover {
+  background: var(--mkc-bg);
+  color: var(--mkc-fg);
+}
+
+/* Pressed: the source is on screen, so the control reads as engaged for as long
+   as the view is. Without this the button looked identical in both states, and
+   the only way to tell you were looking at source was to read the text. */
+.md-comment__source-toggle.is-active {
+  background: var(--mkc-surface);
+  color: var(--mkc-primary);
+}
+
+/* `pre` is `display: block` with a margin and the theme's code font by default;
+   only the box is ours. It is deliberately *not* `.md-typeset`: this is source
+   text, so it must not be styled by the rules that style prose.
+
+   Hiding it still works despite the `display: block` below, because the
+   widget's own `.md-comment [hidden]` rule at the top of this file is
+   `!important` — otherwise a flex or block display set here would win and the
+   source would be visible under the rendered body at all times. */
+.md-comment__source {
+  display: block;
+  max-height: 24rem;
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.6rem;
+  overflow: auto;
+  border-radius: var(--mkc-radius);
+  background: var(--mkc-bg);
+  color: var(--mkc-fg-light);
+  font-family: var(--md-code-font-family);
+  font-size: 0.72rem;
+  line-height: 1.55;
+  /* The whole point is to show the source as typed, so it wraps rather than
+     scrolling sideways: a long line scrolled off-screen is worse than a soft
+     wrap that is visibly not the rendered view. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+}
+
 /* Actions are pulled left by their own padding so the row optically lines up
    with the comment text above it. */
 .md-comment__actions {
@@ -929,23 +1036,67 @@ button.md-comment__reaction:not(.is-active):hover {
     padding: 0.65rem 0.7rem;
   }
 
-  /* Identity takes its own line, then the emoji trigger, hint and actions
-     share the next one; the buttons stretch so they stay easy to hit. */
+  /* The identity chip keeps the line to itself in width terms: it shrinks, and
+     so does the caption below, rather than pushing any control onto a second
+     row. */
   .md-comment__identity {
-    flex: 1 1 100%;
+    flex: 1 1 6rem;
   }
 
-  .md-comment__spacer {
+  /* The caption is the first casualty — see the note above `.md-comment__label`. */
+  .md-comment__label {
     display: none;
   }
 
+  /* At this width the chip has little left to give, so a slightly narrower
+     button is the better trade — still one row, still easy to hit. */
   .md-comment__bar .md-button {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     justify-content: center;
+    padding: 0 0.5rem;
   }
 
   .md-typeset .md-comment .md-comment__replies {
     padding-left: 0.5rem;
+  }
+}
+
+/* On a phone the row runs out of room even with the caption gone and the chip
+   at its floor, and the reply box — indented, and carrying one more button than
+   the composer — is the first to go over. Each step below drops the least
+   important control rather than wrapping, because a second row is exactly what
+   made the same bar read as two different things. `预览` goes first: the
+   textarea already renders Markdown on submit, so it is a convenience, not a
+   function. */
+@media screen and (max-width: 30em) {
+  .md-typeset .md-comment .md-comment__form--reply .md-button[data-act="preview"] {
+    display: none;
+  }
+}
+
+/* Below this the emoji trigger and the chip's floor have to give too. The
+   picker itself stays reachable from the composer, and a reply is not where
+   anyone reaches for an emoji. */
+@media screen and (max-width: 25em) {
+  .md-typeset .md-comment .md-button[data-act="preview"] {
+    display: none;
+  }
+
+  .md-typeset .md-comment .md-comment__form--reply .md-comment__emoji {
+    display: none;
+  }
+
+  .md-comment__identity {
+    /* A 4rem floor still loses to a filled field's own min-content width, so
+       the chip is allowed to collapse to nothing here: the placeholder keeps it
+       identifiable, and a field that cannot be squeezed would push the buttons
+       off the row again. */
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .md-comment__bar .md-button {
+    padding: 0 0.4rem;
   }
 }
 

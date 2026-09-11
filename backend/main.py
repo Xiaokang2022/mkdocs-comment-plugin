@@ -24,6 +24,7 @@ from security import (
     hash_token,
     make_visitor_id,
     new_delete_token,
+    owns_row,
     require_admin,
     verify_token,
 )
@@ -79,13 +80,17 @@ def normalize_page(raw: str) -> str:
     return page
 
 
-def resolve_visitor(request: Request, provided: Optional[str]) -> str:
-    if provided and 0 < len(provided) <= 128 and provided.isascii():
-        return provided
-    return make_visitor_id(
-        client_ip(request, settings),
-        request.headers.get("user-agent", ""),
-    )
+def resolve_visitor(request: Request) -> str:
+    """The identity behind this request: its address, and nothing else.
+
+    A ``visitor_id`` supplied by the client is deliberately ignored. Identity
+    is what decides how many reaction slots exist and which of them count as
+    “mine”, so leaving it to the client is what allowed one browser to present
+    several identities — and allowed a reader to drop their old one by clearing
+    site data. The field is still accepted in request bodies so that existing
+    clients keep working, but it no longer has any effect.
+    """
+    return make_visitor_id(client_ip(request, settings))
 
 
 def serialize_comment(
@@ -93,6 +98,7 @@ def serialize_comment(
     reactions: Dict[str, int],
     mine: List[str],
     actors: Dict[str, List[str]],
+    visitor: str = "",
 ) -> schemas.CommentOut:
     deleted = bool(row.get("deleted_at"))
     content = row.get("content") or ""
@@ -103,7 +109,20 @@ def serialize_comment(
     anonymous = settings.is_anonymous(row["author"])
     # The address is a separate field precisely so that hiding it is possible;
     # once it has been baked into the name there is no taking it back.
-    author_ip = row.get("client_ip") if settings.shows_author_ip(anonymous) else None
+    #
+    # Withheld on a tombstone. The *name* has to stay (replies quote it in their
+    # `@mention`, so dropping it would break their context), but the address is
+    # not needed for anything a tombstone does — and a commenter who asked for
+    # their comment to be deleted did not agree to keep being identified by it.
+    author_ip = (
+        row.get("client_ip")
+        if not deleted and settings.shows_author_ip(anonymous)
+        else None
+    )
+    # Told to the client so the delete button can appear without the browser
+    # having to guess from a stored token, which it may not have any more.
+    # Not sent for a tombstone: there is nothing left to delete.
+    can_delete = bool(settings.allow_delete and not deleted and owns_row(row, visitor))
     return schemas.CommentOut(
         id=row["id"],
         page=row["page"],
@@ -111,7 +130,8 @@ def serialize_comment(
         thread_id=row["thread_id"],
         reply_to=reply_to,
         # The author stays on a tombstone on purpose: replies quote it in their
-        # `@mention`, so dropping it would break their context.
+        # `@mention`, so dropping it would break their context. The address does
+        # not (see above).
         author=row["author"],
         author_ip=author_ip,
         anonymous=anonymous,
@@ -120,6 +140,7 @@ def serialize_comment(
         created_at=row["created_at"],
         updated_at=row.get("updated_at"),
         deleted=deleted,
+        can_delete=can_delete,
         # Reactions deliberately survive deletion. The text is gone, but the
         # thread this row anchors is kept — so the reactions already collected
         # on it stay visible rather than silently vanishing.
@@ -142,6 +163,7 @@ def hydrate(
             counts.get(row["id"], {}),
             mine.get(row["id"], []),
             actors.get(row["id"], {}),
+            visitor_id,
         )
         for row in rows
     ]
@@ -200,16 +222,18 @@ def server_config() -> schemas.ServerConfigOut:
 
 @app.get("/api/v1/whoami", response_model=schemas.WhoAmIOut, tags=["meta"])
 def whoami(request: Request, visitor_id: Optional[str] = Query(default=None)) -> schemas.WhoAmIOut:
-    """Returns the caller's IP so the frontend can pre-fill the author box.
+    """Returns the caller's address and derived identity.
 
     ``author`` is empty in the anonymous modes: there is nothing to pre-fill,
-    and the frontend must not submit a name on the visitor's behalf.
+    and the frontend must not submit a name on the visitor's behalf. The
+    ``visitor_id`` query parameter is accepted and ignored — the identity comes
+    from the address.
     """
     ip = client_ip(request, settings)
     return schemas.WhoAmIOut(
         ip=ip,
         author=settings.suggested_author(ip),
-        visitor_id=resolve_visitor(request, visitor_id),
+        visitor_id=resolve_visitor(request),
     )
 
 
@@ -222,10 +246,10 @@ def list_comments(
     page: str = Query(..., description="页面唯一标识"),
     limit: int = Query(default=20, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    visitor_id: Optional[str] = Query(default=None),
+    visitor_id: Optional[str] = Query(default=None, description="已弃用，身份由 IP 推导"),
 ) -> schemas.CommentListOut:
     page_key = normalize_page(page)
-    visitor = resolve_visitor(request, visitor_id)
+    visitor = resolve_visitor(request)
 
     roots = db.list_root_comments(page_key, limit, offset)
     replies = db.list_replies([row["id"] for row in roots])
@@ -275,7 +299,7 @@ def create_comment(payload: schemas.CommentCreate, request: Request) -> schemas.
         )
 
     token = new_delete_token() if settings.allow_delete else ""
-    visitor = resolve_visitor(request, payload.visitor_id)
+    visitor = resolve_visitor(request)
     try:
         row = db.create_comment(
             page=page,
@@ -286,7 +310,6 @@ def create_comment(payload: schemas.CommentCreate, request: Request) -> schemas.
             client_ip=ip,
             user_agent=request.headers.get("user-agent", ""),
             visitor_id=visitor,
-            visitor_name=nickname[: settings.max_author_length],
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -326,7 +349,17 @@ def delete_comment(
         raise HTTPException(status_code=403, detail="服务端已关闭删除功能。")
 
     if not is_admin:
-        if not verify_token(x_delete_token or "", db.get_delete_token_hash(comment_id) or ""):
+        # Two ways to prove it is yours, and neither is a nickname:
+        #   * the address the comment was written from — the same identity that
+        #     decides whose reaction is "mine", so clearing site data or
+        #     switching browsers no longer locks you out of your own comment;
+        #   * the one-time token handed out at creation, for a reader who has
+        #     genuinely moved (different network) but kept the token.
+        same_address = owns_row(row, resolve_visitor(request))
+        token_ok = verify_token(
+            x_delete_token or "", db.get_delete_token_hash(comment_id) or ""
+        )
+        if not (same_address or token_ok):
             raise HTTPException(status_code=403, detail="没有权限删除该评论。")
 
     # The trade-off between a tidy thread and a coherent one:
@@ -381,7 +414,7 @@ def toggle_reaction(payload: schemas.ReactionIn, request: Request) -> schemas.Re
     if allowed and emoji not in allowed and emoji not in settings.emoji_picker:
         raise HTTPException(status_code=400, detail="不支持的表情。")
 
-    visitor = resolve_visitor(request, payload.visitor_id)
+    visitor = resolve_visitor(request)
     ip = client_ip(request, settings)
     nickname = (payload.author or "").strip()[: settings.max_author_length]
     try:
@@ -391,7 +424,6 @@ def toggle_reaction(payload: schemas.ReactionIn, request: Request) -> schemas.Re
             emoji,
             visitor,
             display_name=settings.display_author(nickname, ip),
-            nickname=nickname,
             client_ip=ip,
         )
     except ValueError as exc:
@@ -427,10 +459,10 @@ def add_view(payload: schemas.ViewIn, request: Request) -> schemas.ViewOut:
 def get_stats(
     request: Request,
     page: str = Query(..., description="页面唯一标识"),
-    visitor_id: Optional[str] = Query(default=None),
+    visitor_id: Optional[str] = Query(default=None, description="已弃用，身份由 IP 推导"),
 ) -> schemas.PageStatsOut:
     page_key = normalize_page(page)
-    return page_stats(page_key, resolve_visitor(request, visitor_id))
+    return page_stats(page_key, resolve_visitor(request))
 
 
 # --------------------------------------------------------------------- #

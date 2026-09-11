@@ -75,14 +75,6 @@ def _columns(path: str, table: str) -> set:
         conn.close()
 
 
-def _visitors(path: str) -> dict:
-    conn = sqlite3.connect(path)
-    try:
-        return {row[0]: row[1] for row in conn.execute("SELECT visitor_id, name FROM visitors")}
-    finally:
-        conn.close()
-
-
 def _exec(path: str, sql: str, params: tuple = ()) -> None:
     conn = sqlite3.connect(path)
     try:
@@ -101,13 +93,12 @@ def _make_comment(db: Database, page: str, author: str, parent_id=None, token="t
         delete_token_hash=token,
         client_ip="203.0.113.7",
         user_agent="pytest",
-        visitor_id=f"visitor-{author}",
-        visitor_name=author,
+        visitor_id=f"ip-{author}",
     )
     return row["id"]
 
 
-def test_upgrade_and_name_recovery() -> None:
+def test_upgrade_of_an_older_database() -> None:
     global passed, failed
     with tempfile.TemporaryDirectory() as tmp:
         path = str(Path(tmp) / "legacy.db")
@@ -121,42 +112,32 @@ def test_upgrade_and_name_recovery() -> None:
         check("comments 补上 visitor_id", "visitor_id" in _columns(path, "comments"))
         check("reactions 补上 author", "author" in _columns(path, "reactions"))
         check("reactions 补上 client_ip", "client_ip" in _columns(path, "reactions"))
-        check("新建 visitors 表", "name" in _columns(path, "visitors"))
 
-        # Four shapes of historical row, each on its own emoji because a visitor
+        # Three shapes of historical row, each on its own emoji because a visitor
         # can only hold one row per emoji and target:
         #   👍 a pre-migration row: no name, no address — nothing of its own
-        #   ❤️ the row that teaches us that visitor's name
-        #   🎉 an address only
+        #   ❤️ a real nickname
         #   🔥 a name that is literally the address, i.e. the old fallback
-        print("--- 旧数据回填")
+        print("--- 旧数据的署名")
         _exec(path, "INSERT INTO reactions (target_type,target_id,emoji,visitor_id,created_at) "
                     "VALUES ('comment','c1','👍','v-named','2026-01-01T00:00:00+00:00')")
         _exec(path, "INSERT INTO reactions (target_type,target_id,emoji,visitor_id,author,client_ip,created_at) "
                     "VALUES ('comment','c1','❤️','v-named','甲','9.9.9.9','2026-01-02T00:00:00+00:00')")
         _exec(path, "INSERT INTO reactions (target_type,target_id,emoji,visitor_id,author,client_ip,created_at) "
-                    "VALUES ('comment','c1','🎉','v-ip',NULL,'10.0.0.1','2026-01-03T00:00:00+00:00')")
-        _exec(path, "INSERT INTO reactions (target_type,target_id,emoji,visitor_id,author,client_ip,created_at) "
-                    "VALUES ('comment','c1','🔥','v-ghost','10.0.0.1','10.0.0.1','2026-01-04T00:00:00+00:00')")
+                    "VALUES ('comment','c1','🔥','v-old','10.0.0.1','10.0.0.1','2026-01-04T00:00:00+00:00')")
 
-        db.init_schema()  # idempotent, and this is where the backfill runs
+        db.init_schema()  # idempotent, and this is where the relabelling runs
 
         actors = db.reaction_actors("comment", ["c1"]).get("c1", {})
-        # The 👍 row has no author of its own; it is resolved through the
-        # visitor, which is exactly the row that used to be invisible.
-        check("无名行按访客恢复姓名", actors.get("👍") == ["甲"], str(actors))
-        check("行内姓名仍然可用", actors.get("❤️") == ["甲"], str(actors))
-        # Nothing is invented for a row that only has an address: an address is
-        # not a name, and the display layer applies it as a fallback itself.
-        check("只有地址的行不会被当成姓名", "🎉" not in actors, str(actors))
-        check("两项线索都没有的行仍被计入总数",
+        check("行内姓名直接可用", actors.get("❤️") == ["甲"], str(actors))
+        # Nothing is invented for a row that never had a name: neither an
+        # address nor a placeholder is a name somebody chose.
+        check("从未署名的行不出现在名单里", "👍" not in actors, str(actors))
+        check("但它仍被计入总数",
               db.reaction_counts("comment", ["c1"]).get("c1", {}).get("👍") == 1,
               str(db.reaction_counts("comment", ["c1"])))
-        check("同一个名字不会重复列出", (actors.get("👍") or []).count("甲") == 1, str(actors))
 
         print("--- 历史 IP 昵称归并")
-        # `🔥` stores the address *as* the name, which is what an older version
-        # did when the nickname box was left empty.
         check("归并前它显示为地址", actors.get("🔥") == ["10.0.0.1"], str(actors))
         renamed = db.normalize_anonymous_authors("匿名用户")
         check("至少改掉一条", renamed >= 1, str(renamed))
@@ -165,47 +146,30 @@ def test_upgrade_and_name_recovery() -> None:
         check("再跑一次不改任何行", db.normalize_anonymous_authors("匿名用户") == 0)
         check("真实昵称不受影响", actors.get("❤️") == ["甲"], str(actors))
 
-        print("--- 记住的永远只有真实昵称")
-        before = db.reaction_actors("comment", ["c1"]).get("c1", {})
-        with db.connect() as c:
-            db._remember_visitor(c, "", "无名")
-            db._remember_visitor(c, "v-x", "   ")
-        after = db.reaction_actors("comment", ["c1"]).get("c1", {})
-        check("空白访客/昵称被忽略，不影响名单", before == after, f"{before} != {after}")
+        print("--- 名单顺序与去重")
+        # Order is what the tooltip shows, so it has to be the order people
+        # reacted in, and a repeated name must not be listed twice.
+        for who in ("乙", "甲", "丙"):
+            db.toggle_reaction("comment", "c1", "👍", f"ip-{who}", display_name=who)
+        names = db.reaction_actors("comment", ["c1"]).get("c1", {}).get("👍")
+        check("按点赞先后排列", names == ["乙", "甲", "丙"], str(names))
+        db.toggle_reaction("comment", "c1", "👍", "ip-乙")  # same visitor toggles off
+        names = db.reaction_actors("comment", ["c1"]).get("c1", {}).get("👍")
+        check("同一访客再点一次是取消", names == ["甲", "丙"], str(names))
+        # The count stays authoritative: the pre-migration 👍 row has no name and
+        # is still counted, which is exactly what the tooltip spells out.
+        count = db.reaction_counts("comment", ["c1"])["c1"]["👍"]
+        check("计数不少于名单长度", count >= len(names), f"{count} vs {names}")
+        check("差额正好是那条无名旧记录", count - len(names) == 1, f"{count} vs {names}")
 
-        # The copy on the row is a snapshot; the visitor is the source of truth,
-        # so a name learned later replaces an address that was only a fallback.
-        with db.connect() as c:
-            db._remember_visitor(c, "v-ip", "后来改了名")
-        actors2 = db.reaction_actors("comment", ["c1"]).get("c1", {})
-        check("改名后旧记录跟着改",
-              actors2.get("🎉") == ["后来改了名"],
-              str(actors2))
-
-        with db.connect() as c:
-            db._remember_visitor(c, "v-ghost", "幽灵读者")
-        actors3 = db.reaction_actors("comment", ["c1"]).get("c1", {})
-        check("从未留名者一旦留名，历史记录恢复可见",
-              actors3.get("🔥") == ["幽灵读者"],
-              str(actors3))
-        check("四个表情现在都能列出名字",
-              all(len(v) == 1 for v in actors3.values()) and len(actors3) == 4,
-              str(actors3))
-
-        print("--- 共享的 IP 身份不记名字")
-        # `ip-…` ids are derived from address + user agent, so everybody behind
-        # one address shares them. A nickname stored against one would be shown
-        # for strangers' reactions.
-        _exec(path, "INSERT INTO visitors (visitor_id, name, updated_at) "
-                    "VALUES ('ip-0123456789abcdef','不该保留','2026-01-01T00:00:00+00:00')")
-        with db.connect() as c:
-            db._remember_visitor(c, "ip-deadbeef", "也不该记住")
-            db._remember_visitor(c, "v-real", "真实的")
-        db.init_schema()
-        stored = _visitors(path)
-        check("已有的 ip- 条目被清除", "ip-0123456789abcdef" not in stored, str(stored))
-        check("新的 ip- 条目不会写入", "ip-deadbeef" not in stored, str(stored))
-        check("普通浏览器 UUID 正常记住", stored.get("v-real") == "真实的", str(stored))
+        print("--- 同一地址就是同一个人")
+        added = db.toggle_reaction("comment", "c2", "🎉", "ip-shared", display_name="我")
+        check("首次点赞生效", added is True)
+        removed = db.toggle_reaction("comment", "c2", "🎉", "ip-shared", display_name="我")
+        check("同一身份再点是取消", removed is False)
+        check("取消后计数归零",
+              db.reaction_counts("comment", ["c2"]).get("c2", {}).get("🎉", 0) == 0,
+              str(db.reaction_counts("comment", ["c2"])))
 
 
 def test_tombstone_sweep() -> None:
@@ -267,8 +231,8 @@ def test_tombstone_sweep() -> None:
         print("--- 墓碑腾清时其点赞一并清除")
         g = _make_comment(db, page, "G")
         h = _make_comment(db, page, "H", parent_id=g)
-        db.toggle_reaction("comment", g, "👍", "v1", display_name="点赞者", nickname="点赞者")
-        db.toggle_reaction("comment", h, "👍", "v1", display_name="点赞者", nickname="点赞者")
+        db.toggle_reaction("comment", g, "👍", "v1", display_name="点赞者")
+        db.toggle_reaction("comment", h, "👍", "v1", display_name="点赞者")
         db.soft_delete_comment(g)
         removed = db.delete_comment_only(h)
         check("两个 id 都被删除", sorted(removed) == sorted([h, g]), str(removed))
@@ -291,7 +255,7 @@ def test_purge_of_unknown_id() -> None:
         root = _make_comment(db, "/t", "根")
         first = _make_comment(db, "/t", "一", parent_id=root)
         second = _make_comment(db, "/t", "二", parent_id=first)
-        db.toggle_reaction("comment", root, "👍", "v1", display_name="赞", nickname="赞")
+        db.toggle_reaction("comment", root, "👍", "v1", display_name="赞")
         removed = db.delete_comment_tree(second)
         check(
             "从任意一层删除都带走整条 thread",
@@ -305,7 +269,7 @@ def test_purge_of_unknown_id() -> None:
 
 
 def test_anonymous_name_is_not_a_nickname() -> None:
-    """The placeholder must never be learned as somebody's nickname."""
+    """The placeholder is a label, not somebody's chosen name."""
     with tempfile.TemporaryDirectory() as tmp:
         path = str(Path(tmp) / "anon.db")
         print("--- 构造时给出占位名就自动归并")
@@ -327,18 +291,18 @@ def test_anonymous_name_is_not_a_nickname() -> None:
         check("真实昵称不动", db.get_comment("c2")["author"] == "小明")
         check("地址仍然保留在 client_ip", db.get_comment("c1")["client_ip"] == "10.0.0.1")
 
-        print("--- 占位名不会被学成昵称")
-        # The v1 row now carries the placeholder, and the seeding pass must not
-        # read it back as a nickname this visitor chose.
+        print("--- 占位名不会被当成某人的昵称")
+        # The relabelled row now carries the placeholder, and a name list built
+        # from it would claim somebody is called 「匿名用户」.
         with db.connect() as c:
             db.toggle_reaction("comment", "c1", "🎉", "v1", display_name="匿名用户")
-        stored = _visitors(path)
-        check("visitors 里没有占位名", "匿名用户" not in stored.values(), str(stored))
-
-        print("--- 真的留名时照样记住")
-        with db.connect() as c:
-            db._remember_visitor(c, "v1", "后来的名字")
-        check("真实昵称正常写入", _visitors(path).get("v1") == "后来的名字")
+        names = db.reaction_actors("comment", ["c1"]).get("c1", {})
+        # Reaction rows keep whatever name they were written with — that is the
+        # display layer's decision, not the store's. What must not happen is the
+        # placeholder being *learned* and then attributed to other rows, which is
+        # why nothing but the row records a name now.
+        check("新行仍写明写入时的名字", names.get("🎉") == ["匿名用户"], str(names))
+        check("未被写入行的旧行仍无名", "👍" not in names, str(names))
 
         print("--- 选用 IP 作为昵称时就完全不归并")
         path2 = str(Path(tmp) / "ipmode.db")
@@ -354,7 +318,7 @@ def test_anonymous_name_is_not_a_nickname() -> None:
 
 
 def main() -> int:
-    test_upgrade_and_name_recovery()
+    test_upgrade_of_an_older_database()
     print()
     test_anonymous_name_is_not_a_nickname()
     print()

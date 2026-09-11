@@ -68,28 +68,16 @@ CREATE TABLE IF NOT EXISTS page_stats (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-
--- One display name per visitor, instead of a copy per reaction.
---
--- Storing the reactor's name on the reaction row alone made a name a snapshot
--- taken at write time: rows written before the column existed had none and
--- disappeared from the "who reacted" tooltip, and renaming oneself left the old
--- name behind forever. Keying on the visitor id gives a single source of truth,
--- so a name learned later fills in everything that visitor ever did.
-CREATE TABLE IF NOT EXISTS visitors (
-    visitor_id TEXT PRIMARY KEY,
-    name       TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
 """
 
 VALID_TARGETS = {"comment", "page"}
 
-# Prefix `security.make_visitor_id` puts on the id it derives from IP + user
-# agent. That id is shared by everyone behind the same address (an office NAT, a
-# CI runner, a script that sends no id at all), so it names a *connection*, not a
-# person — remembering a nickname against it would pin that name on strangers.
-SHARED_VISITOR_PREFIX = "ip-"
+# Older databases may still hold a `visitors` table mapping a visitor id to a
+# display name. Nothing reads or writes it any more: an identity is now derived
+# from the address, so a per-visitor name would be attributed to everyone behind
+# that address, and the name to show is already recorded on each row. The table
+# is left in place rather than dropped — it is derived data from an older
+# release, and a migration should not delete rows on its own initiative.
 
 # Columns added after the first release. `CREATE TABLE IF NOT EXISTS` silently
 # skips an existing table, so an upgraded deployment would otherwise never see
@@ -119,11 +107,9 @@ class Database:
     def __init__(self, path: str, anonymous_name: str = "") -> None:
         """
         ``anonymous_name`` is the placeholder a blank nickname resolves to, when
-        the deployment uses one. Knowing it lets startup recognise rows that
-        were published under an address instead, and keeps the placeholder out
-        of the learned nicknames in :table:`visitors` — where it would be read
-        back as if somebody had chosen it. Pass an empty string to opt out
-        (which is what ``default_author: ip`` amounts to).
+        the deployment uses one. Knowing it lets startup recognise rows that an
+        older release published under an address instead. Pass an empty string
+        to opt out, which is what ``default_author: ip`` amounts to.
         """
         self.path = path
         self.anonymous_name = (anonymous_name or "").strip()
@@ -154,8 +140,8 @@ class Database:
             conn.execute("PRAGMA synchronous = NORMAL")
             conn.executescript(SCHEMA)
             self._ensure_columns(conn)
-            # Order matters: re-label first, so the visitors pass below sees the
-            # final names and can tell a real nickname from the placeholder.
+            # Re-label rows an older release published under the visitor's
+            # address. Idempotent, and skipped in `default_author: ip` mode.
             if self.anonymous_name:
                 renamed = self._relabel_address_authors(conn, self.anonymous_name)
                 if renamed:
@@ -164,7 +150,6 @@ class Database:
                         renamed,
                         self.anonymous_name,
                     )
-            self._backfill_visitors(conn, self.anonymous_name)
 
     @staticmethod
     def _ensure_columns(conn: sqlite3.Connection) -> None:
@@ -179,51 +164,6 @@ class Database:
             for name, declaration in columns.items():
                 if name not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
-
-    @staticmethod
-    def _backfill_visitors(conn: sqlite3.Connection, anonymous_name: str = "") -> None:
-        """Recover what can still be recovered from rows written earlier.
-
-        Two passes, both idempotent:
-
-        * drop any name recorded against a shared, IP-derived visitor id — those
-          entries are an artefact of an earlier version and would label
-          unrelated readers;
-        * seed :table:`visitors` from reactions that already carry a name, so
-          the mapping is complete for anyone who reacted since names were
-          introduced.
-
-        Nothing is invented for the rows left over. A reaction written before
-        both columns existed has no name and no address, and one that has an
-        address only is not "named 192.0.2.7" — the address is a fallback the
-        display layer applies, not an identity to store.
-        """
-        conn.execute(
-            "DELETE FROM visitors WHERE visitor_id LIKE ?",
-            (f"{SHARED_VISITOR_PREFIX}%",),
-        )
-        params: List[Any] = [utcnow()]
-        # The placeholder is not a nickname, so it must not be learned as one.
-        placeholder_filter = ""
-        if anonymous_name:
-            placeholder_filter = " AND TRIM(author) <> ?"
-            params.append(anonymous_name)
-        params.append(f"{SHARED_VISITOR_PREFIX}%")
-        conn.execute(
-            f"""
-            INSERT INTO visitors (visitor_id, name, updated_at)
-            SELECT visitor_id, MIN(author), ?
-              FROM reactions
-             WHERE author IS NOT NULL
-               AND TRIM(author) <> ''
-               AND visitor_id <> ''
-               AND visitor_id NOT LIKE ?
-               AND (client_ip IS NULL OR TRIM(author) <> TRIM(client_ip)){placeholder_filter}
-             GROUP BY visitor_id
-            ON CONFLICT(visitor_id) DO NOTHING
-            """,
-            params,
-        )
 
     @staticmethod
     def _relabel_address_authors(conn: sqlite3.Connection, anonymous_name: str) -> int:
@@ -257,31 +197,6 @@ class Database:
         with self.connect() as conn:
             return self._relabel_address_authors(conn, anonymous_name)
 
-    @staticmethod
-    def _remember_visitor(
-        conn: sqlite3.Connection, visitor_id: str, name: str
-    ) -> None:
-        """Upsert the display name of a visitor.
-
-        Only ever called with a name the visitor actually typed, and never for a
-        shared, IP-derived id: remembering the IP fallback would let an unnamed
-        reaction overwrite a real nickname with an address, and remembering a
-        shared id would give one person's nickname to everyone behind it.
-        """
-        visitor_id = (visitor_id or "").strip()
-        name = (name or "").strip()
-        if not visitor_id or not name or visitor_id.startswith(SHARED_VISITOR_PREFIX):
-            return
-        conn.execute(
-            """
-            INSERT INTO visitors (visitor_id, name, updated_at) VALUES (?, ?, ?)
-            ON CONFLICT(visitor_id) DO UPDATE SET
-                name = excluded.name,
-                updated_at = excluded.updated_at
-            """,
-            (visitor_id, name, utcnow()),
-        )
-
     # ------------------------------------------------------------------ #
     # comments
     # ------------------------------------------------------------------ #
@@ -296,15 +211,7 @@ class Database:
         client_ip: str,
         user_agent: str,
         visitor_id: str = "",
-        visitor_name: str = "",
     ) -> Dict[str, Any]:
-        """Insert a comment.
-
-        ``author`` is what readers see; ``visitor_name`` is only the nickname the
-        visitor actually typed, which is all :table:`visitors` should learn.
-        Passing the display name for both would record "匿名用户" as a real
-        nickname and then hand it to every reader of that browser.
-        """
         now = utcnow()
         comment_id = new_id()
         thread_id = comment_id
@@ -332,9 +239,6 @@ class Database:
                     now, delete_token_hash, client_ip, visitor_id, user_agent[:512],
                 ),
             )
-            # A typed nickname is worth keeping even if this visitor never
-            # reacts: it is what labels their earlier reactions.
-            self._remember_visitor(conn, visitor_id, visitor_name)
 
         return self.get_comment(comment_id)  # type: ignore[return-value]
 
@@ -570,14 +474,13 @@ class Database:
         emoji: str,
         visitor_id: str,
         display_name: str = "",
-        nickname: str = "",
         client_ip: str = "",
     ) -> bool:
         """Add or remove a reaction. Returns ``True`` when now active.
 
-        Two names, for the same reason comments have two: ``display_name`` is
-        what the hover tooltip shows, ``nickname`` is only what the visitor
-        typed and is the only thing :table:`visitors` learns.
+        Toggling is keyed on ``visitor_id``, so the same reader clicking twice
+        removes their reaction rather than adding a second one. The name is a
+        copy taken at write time; it is what the hover tooltip lists.
         """
         if target_type not in VALID_TARGETS:
             raise ValueError("非法的 target_type")
@@ -608,7 +511,6 @@ class Database:
                     utcnow(),
                 ),
             )
-            self._remember_visitor(conn, visitor_id, nickname)
             return True
 
     def reaction_actors(
@@ -616,15 +518,13 @@ class Database:
     ) -> Dict[str, Dict[str, List[str]]]:
         """Who reacted with what, in the order they did so.
 
-        Backs the hover tooltip. The visitor's *current* name wins over the copy
-        stored on the row, because that copy is only a snapshot: preferring it
-        would freeze an IP-fallback name forever and hide a nickname the
-        visitor set later. The row-level name remains as the fallback for
-        reactors who have no entry — the ones who never came back.
+        Backs the hover tooltip. The name is the copy recorded on the row when
+        the reaction was left, which keeps the list honest: there is no way to
+        attribute a name to an address that a later reader shares.
 
-        Reactors with no name at all are skipped;
-        :meth:`reaction_counts` still reports them, and the UI spells out the
-        remainder instead of quietly showing a short list.
+        Reactors with no name at all are skipped; :meth:`reaction_counts` still
+        reports them, and the UI spells out the remainder instead of quietly
+        showing a short list.
         """
         if not target_ids:
             return {}
@@ -632,24 +532,22 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT r.target_id AS target_id,
-                       r.emoji AS emoji,
-                       COALESCE(NULLIF(TRIM(v.name), ''),
-                                NULLIF(TRIM(r.author), '')) AS name
-                  FROM reactions r
-                  LEFT JOIN visitors v ON v.visitor_id = r.visitor_id
-                 WHERE r.target_type = ? AND r.target_id IN ({placeholders})
-                 ORDER BY r.created_at ASC, r.id ASC
+                SELECT target_id, emoji, author
+                  FROM reactions
+                 WHERE target_type = ? AND target_id IN ({placeholders})
+                 ORDER BY created_at ASC, id ASC
                 """,
                 (target_type, *target_ids),
             ).fetchall()
         result: Dict[str, Dict[str, List[str]]] = {}
         for row in rows:
-            name = (row["name"] or "").strip()
+            name = (row["author"] or "").strip()
             if not name:
                 continue
             names = result.setdefault(row["target_id"], {}).setdefault(row["emoji"], [])
-            # A visitor who toggles off and on again should not be listed twice.
+            # Two rows can carry the same name (a reader who renamed themselves,
+            # or two people who picked the same one), and listing it twice would
+            # only make the tooltip look wrong.
             if name not in names:
                 names.append(name)
         return result

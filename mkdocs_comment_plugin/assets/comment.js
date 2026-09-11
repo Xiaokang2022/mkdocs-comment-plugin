@@ -12,9 +12,13 @@
   var DEFAULTS = {
     apiBase: "/api/v1",
     title: "评论",
-    page: null, // null => derive from location.pathname
-    pageSelector: ".md-content__inner",
-    reactions: ["👍", "❤️", "😄", "🎉", "🚀"],
+    page: null, // null => use the key the plugin wrote into the host
+    // Where *inside an opted-in page* the widget renders. Empty means "right
+    // where the plugin put the host element". It does not decide whether a
+    // page has comments: only the host does, so a page whose front matter does
+    // not ask for a comment section never gets one, whatever this is set to.
+    pageSelector: "",
+    reactions: ["👍", "❤️", "😄", "🎉", "🚀", "👀"],
     pageReactions: null,
     emojiPicker: [
       "👍", "👎", "❤️", "🔥", "🎉", "😄", "😁", "😂", "🤣", "😊",
@@ -52,9 +56,11 @@
   var DEFAULT_LABELS = {
     author: "昵称",
     // `{name}` is substituted with the deployment's anonymous name, so renaming
-    // it does not leave a stale placeholder behind.
+    // it does not leave a stale placeholder behind. This is also the only place
+    // the Markdown note appears — the composer bar used to repeat it beside the
+    // emoji button, which said the same thing twice in one row.
     authorPlaceholder: "留空则显示为 {name}",
-    authorIp: "该评论未填写昵称，这里显示其 IP 地址",
+    authorIp: "该访客的 IP 地址",
     contentPlaceholder: "写下你的想法… 支持 Markdown 语法",
     submit: "发表评论",
     submitting: "提交中…",
@@ -83,14 +89,22 @@
     error: "出错了，请稍后再试",
     networkError: "无法连接评论服务，请稍后再试",
     requiredAuthor: "请填写昵称",
+    // Shown when the submit button is pressed with an empty box. Deliberately
+    // short: it answers "what now?" in a glance, and the placeholder above
+    // already explains what to do.
+    emptyContent: "请先输入内容",
     tooLong: "内容超过长度限制",
     posted: "评论已发布",
     replied: "回复已发布",
     deleted: "评论已删除",
     deletedComment: "该评论已被删除",
     you: "我",
-    markdownHint: "支持 Markdown",
-    retry: "重试"
+    retry: "重试",
+    // The source toggle in a comment's top-right corner. One label per state,
+    // because the button's icon stays the same and these are the only clue
+    // about what clicking does next.
+    showSource: "查看 Markdown 源码",
+    showRendered: "查看渲染后的内容"
   };
 
   var raw = window.MKCOMMENT_CONFIG || {};
@@ -129,7 +143,7 @@
   /**
    * Look up a UI string, allowing `labels` in mkdocs.yml to override it.
    *
-   * An explicitly empty label (e.g. `markdownHint: ""`) renders nothing and
+   * An explicitly empty label (e.g. `more: ""`) renders nothing and
    * lets the caller drop the element, while a missing key falls back to the
    * built-in Chinese default from `DEFAULT_LABELS`.
    *
@@ -441,7 +455,18 @@
     loading: false,
     mountedFor: null,
     // Pill whose reaction tooltip is currently open.
-    tipFor: null
+    tipFor: null,
+    // Whether that tip was opened by focus rather than by hovering, and the
+    // last pointer position, so `resyncTip` can re-derive the answer after a
+    // rebuild has invalidated the pill it was based on.
+    tipKeyboard: false,
+    tipX: null,
+    tipY: null,
+    // Ids of the comments currently shown as Markdown source. Kept here rather
+    // than in the DOM because `renderList` rebuilds every item, and without
+    // this a reaction — whose pill sits directly under the toggle — would flip
+    // the comment the reader was inspecting back to its rendered form.
+    sourceOpen: {}
   };
 
   /* ====================================================================== *
@@ -594,10 +619,15 @@
     var tip = $('[data-role="tip"]');
     var text = pill.getAttribute("data-tip");
     if (!tip || !text) {
+      hideTip();
       return;
     }
     state.tipFor = pill;
-    tip.textContent = text;
+    if (tip.textContent !== text) {
+      // Assigning the same string replaces the text node for nothing, and this
+      // runs on every pointer move while a tip is up.
+      tip.textContent = text;
+    }
     tip.hidden = false;
 
     // Both boxes are viewport rects, so the difference is independent of how
@@ -614,8 +644,52 @@
   function hideTip() {
     var tip = $('[data-role="tip"]');
     state.tipFor = null;
+    state.tipKeyboard = false;
     if (tip) {
       tip.hidden = true;
+    }
+  }
+
+  /**
+   * Re-decide whether the tip should still be showing, from the pointer.
+   *
+   * A tip used to be able to outlive the pill it described. Toggling a
+   * reaction rebuilds the pill row, and replacing a node does not fire
+   * `mouseout` on it — nothing removes the element the pointer is over in a way
+   * the browser reports, so the tip simply stayed on screen describing a pill
+   * that no longer existed.
+   *
+   * Asking the document what is under the pointer answers the question the
+   * event handlers were trying to answer, and does it after the fact: if that is
+   * still a pill, its text and position are refreshed; if it is not, the tip
+   * goes away. Called after every rebuild of a reaction row, and on every
+   * pointer move while a tip is up.
+   */
+  function resyncTip() {
+    var current = state.tipFor;
+    if (!current) {
+      return;
+    }
+    if (state.tipKeyboard) {
+      // Opened by focus, so the pointer's position says nothing about it.
+      if (!current.isConnected || !current.matches(":focus")) {
+        hideTip();
+      }
+      return;
+    }
+    if (state.tipX == null) {
+      // No pointer has been seen (a touch device, or a programmatic toggle).
+      if (!current.isConnected) {
+        hideTip();
+      }
+      return;
+    }
+    var under = document.elementFromPoint(state.tipX, state.tipY);
+    var pill = under && under.closest ? under.closest("[data-tip]") : null;
+    if (pill) {
+      showTip(pill);
+    } else {
+      hideTip();
     }
   }
 
@@ -645,7 +719,9 @@
     views:
       "M12 9a3 3 0 0 1 3 3 3 3 0 0 1-3 3 3 3 0 0 1-3-3 3 3 0 0 1 3-3m0-4.5c5 0 9.27 3.11 11 7.5-1.73 4.39-6 7.5-11 7.5S2.73 16.39 1 12c1.73-4.39 6-7.5 11-7.5M3.18 12a9.821 9.821 0 0 0 17.64 0 9.821 9.821 0 0 0-17.64 0",
     comments:
-      "M9 22a1 1 0 0 1-1-1v-3H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6.1l-3.7 3.71c-.2.19-.45.29-.7.29zm1-6v3.08L13.08 16H20V4H4v12zM6 7h12v2H6zm0 4h9v2H6z"
+      "M9 22a1 1 0 0 1-1-1v-3H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6.1l-3.7 3.71c-.2.19-.45.29-.7.29zm1-6v3.08L13.08 16H20V4H4v12zM6 7h12v2H6zm0 4h9v2H6z",
+    markdown:
+      "M20.56 18H3.44C2.65 18 2 17.37 2 16.59V7.41C2 6.63 2.65 6 3.44 6h17.12c.79 0 1.44.63 1.44 1.41v9.18c0 .78-.65 1.41-1.44 1.41M6.81 15.19v-3.66l1.92 2.35 1.92-2.35v3.66h1.93V8.81h-1.93l-1.92 2.35-1.92-2.35H4.89v6.38zM19.69 12h-1.92V8.81h-1.92V12h-1.93l2.89 3.28z"
   };
 
   /**
@@ -668,7 +744,28 @@
    */
   function commentHtml(comment, replies) {
     var deleted = comment.deleted;
+    // A token this browser still holds for the comment. Not the primary rule
+    // any more — see the delete button below — but it is what lets the "我"
+    // badge mark comments posted from this browser.
     var mine = tokens()[comment.id];
+
+    // The source toggle sits at the far end of the meta row, which is the
+    // comment's top-right corner. It is offered for every published comment
+    // rather than only for ones that "look like Markdown": deciding that would
+    // need a heuristic, and a control that comes and goes is harder to learn
+    // than one that is always in the same place. It is also how the source gets
+    // copied — plain text included.
+    //
+    // `sourceOpen` is read here so a rebuild keeps the view the reader chose.
+    var sourceOpen = !!state.sourceOpen[comment.id];
+    var sourceToggle = deleted
+      ? ""
+      : '<button type="button" class="md-comment__source-toggle' +
+        (sourceOpen ? " is-active" : "") +
+        '" data-act="source" aria-pressed="' + (sourceOpen ? "true" : "false") +
+        '" title="' + attr(sourceOpen ? t("showRendered") : t("showSource")) +
+        '" aria-label="' + attr(sourceOpen ? t("showRendered") : t("showSource")) +
+        '">' + icon("markdown") + "</button>";
 
     var meta = '<span class="md-comment__author">' + esc(comment.author) + "</span>";
     // The address is only sent when the deployment publishes it, and it is only
@@ -687,10 +784,28 @@
     if (mine) {
       meta += '<span class="md-comment__badge">' + esc(t("you")) + "</span>";
     }
+    meta += timeHtml(comment.created_at) + sourceToggle;
 
+    // Both views ship in the markup and the toggle flips which one is `hidden`.
+    // Building the source lazily would mean looking the comment up in
+    // `state.comments` and re-rendering on click, which would close any open
+    // reply box in the thread; flipping an attribute cannot disturb anything.
     var body = deleted
       ? '<p class="md-comment__gone">' + esc(t("deletedComment")) + "</p>"
-      : '<div class="md-typeset md-comment__body">' + (comment.content_html || "") + "</div>";
+      : '<div class="md-typeset md-comment__body" data-role="body"' +
+        (sourceOpen ? " hidden" : "") +
+        ">" +
+        (comment.content_html || "") +
+        "</div>" +
+        // `<pre>` rather than a styled div: the point of this view is to show
+        // the source *exactly* as typed, and only `<pre>` preserves the
+        // meaningful whitespace in a list, a code fence or an indented block
+        // without a single CSS rule of our own.
+        '<pre class="md-comment__source" data-role="source"' +
+        (sourceOpen ? "" : " hidden") +
+        ">" +
+        esc(comment.content || "") +
+        "</pre>";
 
     var actions = "";
     if (!deleted) {
@@ -718,7 +833,11 @@
       actions +=
         '<button type="button" class="md-comment__action" data-act="reply">' +
         esc(t("reply")) + "</button>";
-      if (CFG.allowDelete && mine) {
+      // The server decides this from the request's address, and says so in
+      // `can_delete`. The browser no longer infers it from the nickname, nor
+      // relies solely on a token it may have cleared — but a token it still
+      // holds keeps working, because the server accepts either.
+      if (CFG.allowDelete && (comment.can_delete || mine)) {
         actions +=
           '<button type="button" class="md-comment__action md-comment__action--danger" ' +
           'data-act="delete">' + esc(t("remove")) + "</button>";
@@ -739,7 +858,7 @@
       '" data-id="' + attr(comment.id) + '" data-thread="' + attr(comment.thread_id) + '">' +
       avatarHtml(comment.author, comment.anonymous) +
       '<div class="md-comment__main">' +
-      '<div class="md-comment__meta">' + meta + timeHtml(comment.created_at) + "</div>" +
+      '<div class="md-comment__meta">' + meta + "</div>" +
       body +
       '<div class="md-comment__actions">' + actions +
       // The picker lives inside the action row so it can be absolutely
@@ -815,11 +934,12 @@
     // A reply box is one line shorter than the main one; both stay usable even
     // if `editor_rows` is configured to something silly.
     var rows = isReply ? Math.max(2, CFG.editorRows - 1) : Math.max(2, CFG.editorRows);
-    var hint = t("markdownHint");
     return (
       '<form class="md-comment__form' + (isReply ? " md-comment__form--reply" : "") + '" novalidate>' +
       // The composer reads as a single control: the prose area on top, and one
-      // bar underneath grouping identity, the emoji trigger and the hint.
+      // bar underneath holding identity, the emoji trigger and the buttons.
+      // The Markdown note lives in the textarea placeholder rather than in this
+      // bar: it was printed in both places, which said the same thing twice.
       '<textarea class="md-comment__input" name="content" rows="' + rows + '" ' +
       'maxlength="' + CFG.maxContentLength + '" ' +
       'placeholder="' + attr(t("contentPlaceholder")) + '" data-role="content"></textarea>' +
@@ -838,17 +958,21 @@
           attr(t("addReaction")) + '" aria-label="' + attr(t("addReaction")) + '">' +
           icon("emoticon") + "</button>"
         : "") +
-      // Kept in the DOM even when no default hint is configured, so validation
-      // messages always have somewhere to appear (`setHint` un-hides it).
-      '<span class="md-comment__hint" data-role="hint"' + (hint ? "" : " hidden") +
-      ">" + esc(hint) + "</span>" +
-      '<span class="md-comment__spacer"></span>' +
+      // Empty and hidden, but always present: `setHint` fills it in when a
+      // submission is rejected, and validation must never have nowhere to go.
+      '<span class="md-comment__hint" data-role="hint" hidden></span>' +
       (isReply
         ? '<button type="button" class="md-button" data-act="cancel">' + esc(t("cancel")) + "</button>"
         : "") +
       '<button type="button" class="md-button" data-act="preview">' + esc(t("preview")) + "</button>" +
-      '<button type="submit" class="md-button md-button--primary" data-role="submit">' +
-      esc(t("submit")) + "</button>" +
+      // `type="button"`, so pressing Enter anywhere in the form cannot submit
+      // it: the only way to post is to press this button.
+      //
+      // A reply's primary action is labelled `回复`, not `发表评论`: it is the
+      // thing the reader just asked for, and at phone widths the shorter label
+      // is also what keeps the row from overflowing.
+      '<button type="button" class="md-button md-button--primary" data-act="submit" ' +
+      'data-role="submit">' + esc(t(isReply ? "reply" : "submit")) + "</button>" +
       // The picker is a child of the bar so it can be pinned to it as an
       // overlay. In the flow it used to push the whole composer taller, which
       // is exactly what the emoji trigger is meant to avoid.
@@ -886,6 +1010,8 @@
     var stats = $('[data-role="stats"]');
     if (stats) {
       stats.innerHTML = statsHtml();
+      // Same reason as `refreshReactions`: the page-level pills were replaced.
+      resyncTip();
     }
   }
 
@@ -898,6 +1024,20 @@
     if (!wrap) {
       return;
     }
+
+    // Drop source-view state for comments that are no longer in the list —
+    // deleted threads, or a reload that replaced the whole page. Done here
+    // rather than in each of those paths because this is the one place that
+    // knows what the list now contains.
+    var present = {};
+    state.comments.forEach(function (comment) {
+      present[comment.id] = true;
+    });
+    Object.keys(state.sourceOpen).forEach(function (id) {
+      if (!present[id]) {
+        delete state.sourceOpen[id];
+      }
+    });
 
     // Rebuild the tree that the API returns as a flat, page-ordered list.
     var roots = [];
@@ -1246,6 +1386,9 @@
       ? reactionRowHtml(counts, comment.my_reactions, "react", null, true, comment.reaction_users)
       : "";
     row.hidden = !hasReactions;
+    // The pills just above are new nodes, so a tip that was showing for one of
+    // them has lost its anchor. This is the case that used to leave it behind.
+    resyncTip();
   }
 
   function setHint(form, message, isError) {
@@ -1253,10 +1396,10 @@
     if (!hint) {
       return;
     }
-    hint.textContent = message;
+    hint.textContent = message || "";
     hint.classList.toggle("md-comment__hint--error", !!isError);
-    // An empty label hides the default hint, but the element stays available
-    // so a validation failure can always surface.
+    // An empty message hides the element, which is its resting state: the
+    // composer shows no hint until something needs saying.
     hint.hidden = !message;
   }
 
@@ -1274,7 +1417,9 @@
       return;
     }
     if (!content) {
-      setHint(form, t("contentPlaceholder"), true);
+      // Not `contentPlaceholder`: that is a long, friendly prompt, and echoing
+      // it back as an error reads as though nothing went wrong.
+      setHint(form, t("emptyContent"), true);
       contentInput.focus();
       return;
     }
@@ -1306,7 +1451,7 @@
           saveToken(data.comment.id, data.delete_token);
         }
         contentInput.value = "";
-        setHint(form, t("markdownHint"), false);
+        setHint(form, "", false);
 
         var comment = data.comment;
         if (!parentId) {
@@ -1384,6 +1529,47 @@
       slot.innerHTML = "";
       slot.removeAttribute("data-parent");
     });
+  }
+
+  /**
+   * Swap one comment between its rendered body and its Markdown source.
+   *
+   * Both nodes are already in the markup, so this only flips what is `hidden`.
+   * That is deliberate: rendering the source into the body on demand would mean
+   * rebuilding the item, and a rebuild closes the reply box if one is open in
+   * this thread, scrolls nowhere and loses the reader's place for what is a
+   * pure display change.
+   *
+   * The button keeps its icon in both states and carries `aria-pressed` plus a
+   * label naming the *next* state — the tooltip is the only thing that has to
+   * change, and it is also what tells a screen reader what clicking will do.
+   */
+  function toggleSource(item) {
+    var body = item.querySelector('[data-role="body"]');
+    var source = item.querySelector('[data-role="source"]');
+    var button = item.querySelector('[data-act="source"]');
+    if (!body || !source || !button) {
+      return;
+    }
+    // Read the *new* state first and write that everywhere, rather than
+    // inverting each thing separately: a comment shows exactly one of the two
+    // views, and deriving both from one value is what keeps them consistent.
+    var id = item.getAttribute("data-id");
+    var open = !state.sourceOpen[id];
+    if (open) {
+      state.sourceOpen[id] = true;
+    } else {
+      delete state.sourceOpen[id];
+    }
+
+    body.hidden = open;
+    source.hidden = !open;
+
+    var label = open ? t("showRendered") : t("showSource");
+    button.setAttribute("aria-pressed", open ? "true" : "false");
+    button.setAttribute("title", label);
+    button.setAttribute("aria-label", label);
+    button.classList.toggle("is-active", open);
   }
 
   function previewToggle(form) {
@@ -1473,13 +1659,11 @@
     var root = state.root;
 
     root.addEventListener("submit", function (event) {
-      var form = event.target.closest("form");
-      if (!form) {
-        return;
-      }
+      // Posted through the button only. A form can also be submitted implicitly
+      // — pressing Enter in the nickname field, for instance — and that is
+      // exactly the accident this prevents, so a submit event is swallowed
+      // rather than turned into a comment.
       event.preventDefault();
-      var slot = form.closest(".md-comment__reply-slot");
-      submitForm(form, slot ? slot.getAttribute("data-parent") : null);
     });
 
     root.addEventListener("click", function (event) {
@@ -1492,6 +1676,13 @@
       var item = trigger.closest(".md-comment__item");
 
       switch (action) {
+        case "submit": {
+          if (form) {
+            var slot = form.closest(".md-comment__reply-slot");
+            submitForm(form, slot ? slot.getAttribute("data-parent") : null);
+          }
+          break;
+        }
         case "react": {
           if (item) {
             react("comment", item.getAttribute("data-id"), trigger.getAttribute("data-emoji"));
@@ -1529,6 +1720,12 @@
         case "preview": {
           if (form) {
             previewToggle(form);
+          }
+          break;
+        }
+        case "source": {
+          if (item) {
+            toggleSource(item);
           }
           break;
         }
@@ -1582,9 +1779,10 @@
       if (input.name === "author") {
         input.classList.remove("md-comment__field--error");
       }
+      // Typing dismisses a complaint about the previous attempt.
       var form = input.closest("form");
       if (form) {
-        setHint(form, t("markdownHint"), false);
+        setHint(form, "", false);
       }
     });
 
@@ -1602,9 +1800,26 @@
     });
 
     // ------------------------------------------------------- reaction tip
+    // The pointer's position is kept so `resyncTip` can ask the document what
+    // is under it after a rebuild, instead of trusting a stale `state.tipFor`.
+    root.addEventListener("mousemove", function (event) {
+      state.tipX = event.clientX;
+      state.tipY = event.clientY;
+      // A tip that is already up re-checks itself on every move. `mouseout` is
+      // not enough on its own: when a reaction is toggled the row is rebuilt,
+      // and the browser's idea of what the pointer is over is gone with the old
+      // node — so no `mouseout` ever arrives and the tip stays on screen after
+      // the reader has moved away. Asking the document directly closes that
+      // gap, and it costs one hit test only while a tip is showing.
+      if (state.tipFor) {
+        resyncTip();
+      }
+    });
+
     root.addEventListener("mouseover", function (event) {
       var pill = event.target.closest && event.target.closest("[data-tip]");
       if (pill && pill !== state.tipFor) {
+        state.tipKeyboard = false;
         showTip(pill);
       }
     });
@@ -1618,11 +1833,17 @@
       }
     });
 
+    // The pointer leaving the widget altogether is unambiguous, and it is the
+    // one case `resyncTip` cannot see: no further move inside the widget
+    // arrives to correct a tip the rebuild left behind.
+    root.addEventListener("mouseleave", hideTip);
+
     // The same affordance for keyboard users, since a tooltip that only works
     // on hover is unreachable without a pointer.
     root.addEventListener("focusin", function (event) {
       var pill = event.target.closest && event.target.closest("[data-tip]");
       if (pill) {
+        state.tipKeyboard = true;
         showTip(pill);
       }
     });
@@ -1634,17 +1855,13 @@
     });
 
     root.addEventListener("keydown", function (event) {
-      // Ctrl/Cmd + Enter submits, Escape dismisses transient UI.
-      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-        var form = event.target.closest("form");
-        if (form) {
-          event.preventDefault();
-          form.requestSubmit();
-        }
-      }
+      // Escape dismisses transient UI. Nothing here submits: a comment is sent
+      // by pressing the button, so no keystroke can post one by accident —
+      // including the newline Enter inserts in the textarea.
       if (event.key === "Escape") {
         closeReplyForms();
         closePickers(null);
+        hideTip();
       }
     });
   }
@@ -1653,11 +1870,27 @@
    * bootstrap
    * ====================================================================== */
   function mount() {
-    var container = document.querySelector(CFG.pageSelector) || document.querySelector(".md-content__inner");
-    if (!container) {
+    // The MkDocs plugin appends a host element to the pages that opted in via
+    // their metadata, and it carries the canonical page key. The host is the
+    // *only* thing that decides whether a comment section exists at all, which
+    // is what makes the per-page front matter authoritative.
+    //
+    // In particular there is no fallback selector that could mount without a
+    // host: a CSS selector runs on every page it matches, so "mount wherever
+    // this matches" is indistinguishable from "mount everywhere" — it silently
+    // opted whole sites in, and the page metadata looked like it was doing
+    // nothing. A page that wants comments says so in its own front matter.
+    var host = document.querySelector(".md-comment-host");
+    if (!host) {
       return;
     }
-    var page = currentPage();
+    var page = host.getAttribute("data-page") || currentPage();
+
+    // `page_selector` only chooses *where* inside an opted-in page the widget
+    // renders; it can no longer choose *whether*. Useful when the host lands at
+    // the end of the prose but the comments belong in a dedicated container.
+    var inside = CFG.pageSelector ? document.querySelector(CFG.pageSelector) : null;
+    var container = inside || host;
     var existing = container.querySelector(".md-comment");
 
     if (existing && state.mountedFor === page && existing === state.root) {

@@ -13,9 +13,15 @@ from pydantic import BaseModel, Field
 class CommentCreate(BaseModel):
     page: str = Field(..., description="页面唯一标识（通常是 pathname）")
     content: str = Field(..., description="Markdown 原文")
-    author: Optional[str] = Field(default=None, description="昵称，留空则使用 IP")
+    author: Optional[str] = Field(default=None, description="昵称，留空则使用匿名昵称")
     parent_id: Optional[str] = Field(default=None, description="被回复评论的 id")
-    visitor_id: Optional[str] = Field(default=None, description="客户端匿名标识")
+    # Accepted for compatibility with clients written before identity became
+    # address-based, and ignored: the server derives the visitor from the
+    # request's address. Kept in the schema so an older client does not start
+    # failing validation.
+    visitor_id: Optional[str] = Field(
+        default=None, description="已弃用，身份由请求来源 IP 推导"
+    )
     # Honeypot: bots love filling hidden fields.
     website: Optional[str] = Field(default=None, description="(反垃圾字段，请留空)")
 
@@ -24,10 +30,12 @@ class ReactionIn(BaseModel):
     target_type: Literal["comment", "page"] = "comment"
     target_id: str
     emoji: str
-    visitor_id: Optional[str] = None
-    # Stored with the reaction so the UI can list who reacted. Falls back to
-    # the caller's IP, exactly like a comment author.
-    author: Optional[str] = Field(default=None, description="点赞者昵称，留空则使用 IP")
+    visitor_id: Optional[str] = Field(
+        default=None, description="已弃用，身份由请求来源 IP 推导"
+    )
+    # Recorded with the reaction so the UI can list who reacted. Falls back to
+    # the caller's address, exactly like a comment author.
+    author: Optional[str] = Field(default=None, description="点赞者昵称，留空则使用匿名昵称")
 
 
 class ViewIn(BaseModel):
@@ -69,6 +77,12 @@ class CommentOut(BaseModel):
     created_at: str
     updated_at: Optional[str] = None
     deleted: bool = False
+    # Whether the caller may delete this comment. Decided by the server from the
+    # request's address (see `owns_comment`), never from the nickname, and sent
+    # so the widget does not have to infer it from a stored token it may have
+    # lost. False once the comment is a tombstone — there is nothing left to
+    # delete.
+    can_delete: bool = False
     reactions: Dict[str, int] = Field(default_factory=dict)
     my_reactions: List[str] = Field(default_factory=list)
     # emoji -> display names, in the order they reacted (for the hover tooltip).

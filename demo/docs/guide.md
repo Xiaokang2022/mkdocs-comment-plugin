@@ -1,10 +1,21 @@
+---
+comments: true
+---
+
 # 使用指南
 
 ## 两分钟接入
 
 1. 启动后端服务
-2. 在 `mkdocs.yml` 中启用插件
-3. `mkdocs serve` 预览
+2. 在 `mkdocs.yml` 中启用插件（并确保 `markdown_extensions` 里有 `meta`）
+3. 在需要评论区的页面头部写上 `comments: true`
+4. `mkdocs serve` 预览
+
+本页的头部就是这样写的，所以页面底部有评论区。演示站里的[「没有评论区的一页」](no-comments.md)
+没有写这一行，因此那一页既没有评论区，也不会发出任何评论相关的请求。
+
+> 不要用 `page_selector` 来「挑选」哪些页面有评论区：它是个 CSS 选择器，
+> 会在所有命中的页面上生效，等于整站开启。它只能在已经开启的页面里换一个渲染位置。
 
 ## 配置项速查
 
@@ -12,18 +23,23 @@
 | --- | --- | --- | --- |
 | `api_base` | str | `/api/v1` | 后端 API 根地址 |
 | `title` | str | `评论` | 评论区标题 |
-| `page_selector` | str | `.md-content__inner` | 挂载容器选择器 |
-| `reactions` | list | `👍 ❤️ 😄 🎉 🚀` | 单条评论可用的表情 |
+| `meta_key` | str | `comments` | 页面元数据里用哪个字段表示「本页要评论区」 |
+| `meta_default` | bool | `false` | 没写该字段时的默认值；`false` 即默认不开 |
+| `page_selector` | str | 空 | 在**已开启评论区的页面里**换一个挂载容器；只能选位置，不能决定哪一页有评论区 |
+| `reactions` | list | `👍 ❤️ 😄 🎉 🚀 👀` | 单条评论可用的表情 |
 | `page_reactions` | list | 同 `reactions` | 页面级表情 |
 | `emoji_picker` | list | 24 个表情 | 表情选择面板 |
 | `show_stats` | bool | `true` | 是否显示统计栏 |
 | `count_views` | bool | `true` | 是否统计浏览量 |
 | `per_page` | int | `20` | 每页根评论数 |
 | `default_author` | str | `anonymous` | 昵称留空时的处理：`anonymous` 用 `anonymous_name`，`ip` 用访客 IP，也可直接写一个默认昵称 |
-| `anonymous_name` | str | `匿名用户` | 未填写昵称时显示的名字 |
+| `anonymous_name` | str | `匿名用户` | 未填写昵称时显示的名字；需与后端 `MKC_ANONYMOUS_NAME` 一致 |
 | `require_author` | bool | `false` | 是否强制填写昵称 |
-| `allow_delete` | bool | `true` | 是否允许自助删除 |
-| `labels` | dict | `{}` | 覆盖任意界面文案（置空则隐藏该元素） |
+| `allow_delete` | bool | `true` | 后端与前端都开时才显示删除按钮；能不能删由后端按来源地址判定，昵称不参与 |
+| `labels` | dict | `{}` | 覆盖任意界面文案（置空则隐藏该元素）；空内容提示是 `emptyContent` |
+
+> IP 展示给谁由**后端**的 `MKC_SHOW_AUTHOR_IP` 决定（默认 `always`，即所有访客都显示）。
+> `anonymous` 只标未署名的评论，`never` 则完全不显示且不会下发字段。
 
 ### 外观与交互
 
@@ -44,6 +60,11 @@
 ## 本页面也有评论区
 
 向下滚动即可看到——每个页面拥有独立的评论流。
+
+提交评论请按「发表评论」按钮：回车在输入框里是换行，在昵称框里也不会把评论发出去。
+
+每条评论右上角有一个 Markdown 图标：点它可以把该条评论切到 Markdown 原文（含代码围栏与缩进），
+再点一次回到渲染结果。原文与渲染结果是一起下发的，所以切换不会重新加载页面，也不会关掉正在填写的回复框。
 
 ```python
 def hello():

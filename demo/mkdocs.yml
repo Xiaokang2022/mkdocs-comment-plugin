@@ -33,6 +33,7 @@ theme:
 nav:
   - 首页: index.md
   - 使用指南: guide.md
+  - 没有评论区的一页: no-comments.md
 
 plugins:
   - search
@@ -40,9 +41,11 @@ plugins:
       # 后端服务地址；也可写成 http://127.0.0.1:8000/api/v1
       api_base: http://127.0.0.1:8000/api/v1
       title: 评论
-      page_selector: ".md-content__inner"
-      reactions: ["👍", "❤️", "😄", "🎉", "🚀"]
-      page_reactions: ["👍", "❤️", "😄", "🎉", "🚀"]
+      # 这里**不要**设置 page_selector：它是一个 CSS 选择器，会在所有命中的页面上
+      # 生效，等于绕过「本页要不要评论区」的判断。评论区的开关只由页面头部的
+      # `comments: true` 决定。page_selector 只能在已开启的页面里换一个挂载位置。
+      reactions: ["👍", "❤️", "😄", "🎉", "🚀", "👀"]
+      page_reactions: ["👍", "❤️", "😄", "🎉", "🚀", "👀"]
       show_stats: true
       show_page_reactions: true
       count_views: true      # 每次刷新都会 +1（后端按 IP 限流防刷）
@@ -74,6 +77,10 @@ markdown_extensions:
   - def_list
   - footnotes
   - md_in_html
+  # Page metadata (`comments: true`) is how a page asks for a comment section.
+  # mkdocs-material enables this by default, but a site that lists its own
+  # extensions has to name it explicitly.
+  - meta
   - tables
   - toc:
       permalink: true

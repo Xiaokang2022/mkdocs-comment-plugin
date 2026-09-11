@@ -101,6 +101,13 @@ def main() -> int:
     check("Markdown 加粗已渲染", "<strong>加粗</strong>" in html, html)
     check("代码已渲染", "<code>code</code>" in html, html)
     check("外链已加固", 'rel="nofollow noopener noreferrer"' in html and 'target="_blank"' in html, html)
+    # The source toggle needs both views: `content_html` is what is shown by
+    # default, and `content` is what the reader sees after pressing it. Sending
+    # only the HTML would make the toggle impossible without a second request.
+    check("同时下发 Markdown 原文本（供源码视图）",
+          root["content"] == "**加粗** 与 [链接](https://mkdocs.org) 以及 `code`",
+          repr(root.get("content")))
+    check("原文本与渲染结果不同（切换才有意义）", root["content"] != html)
     check("下发删除令牌", bool(token))
 
     print("\n[2b] 转义与自动链接（回归）")
@@ -141,7 +148,7 @@ def main() -> int:
         )
         check("IP 没有混进昵称里", comment["author"] != comment.get("author_ip"))
 
-    print("\n[3b] 有昵称时不显示 IP")
+    print("\n[3b] 署名评论同样带 IP（默认策略）")
     status, named = write(
         "POST", "/comments", {"page": PAGE, "author": "有名字的人", "content": "署名评论"}
     )
@@ -149,10 +156,15 @@ def main() -> int:
     if status == 201:
         check("author 为所填昵称", named["comment"]["author"] == "有名字的人")
         check("未标记为匿名", named["comment"]["anonymous"] is False)
-        # Default policy is "anonymous", so a commenter who chose a name is not
-        # identified by address as well.
-        check("已署名时不发 IP", named["comment"].get("author_ip") is None,
-              str(named["comment"].get("author_ip")))
+        # The default is "always": a chosen name is not a reason to withhold the
+        # address, because the address is the only part a reader can verify.
+        check(
+            "已署名时也发 IP",
+            bool(re.match(r"^[0-9a-fA-F:.]{3,}$", named["comment"].get("author_ip") or "")),
+            str(named["comment"].get("author_ip")),
+        )
+        check("IP 依然没有混进昵称里",
+              named["comment"]["author"] != named["comment"].get("author_ip"))
         write("DELETE", f"/comments/{named['comment']['id']}?hard=true",
               headers={"X-Admin-Token": ADMIN_TOKEN})
 
@@ -215,25 +227,40 @@ def main() -> int:
     check("评论表情可用", status == 200 and bad.get("reactions", {}).get("🚀") == 1, str(bad))
     check("返回点赞者名单", bad.get("reaction_users", {}).get("🚀") == ["点赞者"], str(bad))
 
-    print("\n[6b] 表情名单")
-    # Two reactors, to pin the order the tooltip lists them in. The name is
-    # what the UI shows, so the second one must not displace the first.
-    status, second = write(
+    print("\n[6b] 身份就是地址：同一来源只能占一个坑")
+    # A client-supplied `visitor_id` is ignored, so these two requests are the
+    # same visitor and the second one takes the reaction back. That is the
+    # behaviour the rule asks for: one address is one person, and it is what
+    # stops a single browser from presenting several identities.
+    status, toggled_off = write(
         "POST",
         "/reactions",
         {
             "target_type": "comment",
             "target_id": root_id,
             "emoji": "🚀",
-            "visitor_id": "smoke-visitor-2",
+            "visitor_id": "smoke-other-browser",
             "author": "第二人",
         },
     )
-    check(
-        "名单按点赞顺序累加",
-        second.get("reaction_users", {}).get("🚀") == ["点赞者", "第二人"],
-        str(second),
+    check("不同 visitor_id 不产生第二个身份", toggled_off.get("active") is False, str(toggled_off))
+    check("计数回到 0", toggled_off.get("reactions", {}).get("🚀", 0) == 0, str(toggled_off))
+    check("名单随之清空", toggled_off.get("reaction_users", {}).get("🚀", []) == [], str(toggled_off))
+
+    # Put it back: the deletion sections below assert on the reactions a
+    # tombstone keeps, so the thread needs to carry some.
+    status, restored = write(
+        "POST",
+        "/reactions",
+        {
+            "target_type": "comment",
+            "target_id": root_id,
+            "emoji": "🚀",
+            "author": "点赞者",
+        },
     )
+    check("再次点赞恢复", restored.get("reactions", {}).get("🚀") == 1, str(restored))
+    check("名单重新出现", restored.get("reaction_users", {}).get("🚀") == ["点赞者"], str(restored))
 
     # An unsigned reactor still needs a readable entry, and it is the same
     # placeholder a comment author gets — the address is displayed beside the
@@ -241,34 +268,11 @@ def main() -> int:
     status, unnamed = write(
         "POST",
         "/reactions",
-        {
-            "target_type": "comment",
-            "target_id": root_id,
-            "emoji": "🎉",
-            "visitor_id": "smoke-visitor-3",
-        },
+        {"target_type": "comment", "target_id": root_id, "emoji": "🎉"},
     )
     names = unnamed.get("reaction_users", {}).get("🎉", [])
     check("未署名时用匿名名字", names == ["匿名用户"], str(unnamed))
-
-    print("\n[6c] 只有计数、没有名字时仍然如实显示")
-    # Two more anonymous reactors on the same emoji collapse to one name, which
-    # is exactly the case the frontend renders as 「xx 和其他 N 人」.
-    for visitor in ("smoke-visitor-4", "smoke-visitor-5"):
-        write(
-            "POST",
-            "/reactions",
-            {"target_type": "comment", "target_id": root_id, "emoji": "🎉", "visitor_id": visitor},
-        )
-    status, listing = call("GET", f"/comments?page={PAGE}&limit=20")
-    target = next((c for c in listing["comments"] if c["id"] == root_id), None)
-    counts = (target or {}).get("reactions", {}).get("🎉")
-    names = (target or {}).get("reaction_users", {}).get("🎉", [])
-    check("计数为 3", counts == 3, str(counts))
-    check("名字去重成 1 条", names == ["匿名用户"], str(names))
-    # The frontend turns that gap into 「匿名用户 和其他 2 人」; what matters here
-    # is that the count is authoritative and the short list is not a lie.
-    check("计数大于名单长度，前端可据此补全", counts > len(names), f"{counts} vs {names}")
+    check("两个表情各自计数", unnamed.get("reactions", {}) == {"🚀": 1, "🎉": 1}, str(unnamed))
 
     print("\n[7] 浏览量统计")
     # The flood check at the end of this section deliberately exhausts the
@@ -336,26 +340,27 @@ def main() -> int:
     status, _ = write("POST", "/comments", {"page": PAGE, "content": "x", "parent_id": root_id, "website": ""})
     check("合法请求不被蜜罐误伤", status == 201, f"got {status}")
 
-    print("\n[10] 删除与权限")
+    print("\n[10] 删除：所有权由地址判定")
     # The shared client attaches X-Admin-Token to every request when the token
     # is configured. Emptying it here is what actually exercises the
-    # "anonymous visitor" path.
+    # "ordinary visitor" path.
     anon = {"X-Admin-Token": ""}
 
-    status, _ = call("DELETE", f"/comments/{root_id}", headers=anon)
-    check("无令牌删除被拒绝 (403)", status == 403, f"got {status}")
+    check("自己的评论标记为可删除", root.get("can_delete") is True, str(root.get("can_delete")))
+
+    # No admin token, no delete token, and this request carries neither: the
+    # source address is what authorizes it. That is the whole rule — a reader
+    # who cleared their storage or switched browsers is still the same visitor,
+    # while a name they happened to type is not consulted at all.
+    status, owner = call("DELETE", f"/comments/{root_id}", headers=anon)
+    check("不带任何令牌，按地址即可删除 (200)", status == 200, f"got {status}")
+    # This root carries a reply, so it must be tombstoned rather than dropped.
+    check("有回复时走软删除", owner.get("mode") == "soft", str(owner))
 
     status, _ = call(
-        "DELETE",
-        f"/comments/{root_id}",
-        headers={"X-Delete-Token": "wrong-token", **anon},
+        "DELETE", f"/comments/{root_id}", headers={"X-Delete-Token": "wrong-token", **anon}
     )
-    check("错误令牌被拒绝 (403)", status == 403, f"got {status}")
-
-    status, deleted = call("DELETE", f"/comments/{root_id}", headers={"X-Delete-Token": token})
-    check("正确令牌可删除 (200)", status == 200, f"got {status}")
-    # This root carries a reply, so it must be tombstoned rather than dropped.
-    check("有回复时走软删除", deleted.get("mode") == "soft", str(deleted))
+    check("重复删除被拒绝 (409)", status == 409, f"got {status}")
 
     status, listing = call("GET", f"/comments?page={PAGE}&limit=10")
     target = next((c for c in listing["comments"] if c["id"] == root_id), None)
@@ -363,13 +368,36 @@ def main() -> int:
     check("删除后内容清空", target is not None and target["content"] == "")
     # The trade-off: the text goes, but what the thread already collected stays
     # so the replies below it do not lose their context or their reactions.
-    check("软删除后点赞保留", target is not None and target["reactions"] == {"🚀": 2, "🎉": 3}, str(target))
-    check("软删除后点赞者名单保留", (target or {}).get("reaction_users", {}).get("🚀") == ["点赞者", "第二人"], str(target))
-    check("匿名点赞者只算一条名字", (target or {}).get("reaction_users", {}).get("🎉") == ["匿名用户"], str(target))
+    check("软删除后点赞保留", target is not None and target["reactions"] == {"🚀": 1, "🎉": 1}, str(target))
+    check("软删除后点赞者名单保留", (target or {}).get("reaction_users", {}).get("🚀") == ["点赞者"], str(target))
+    check("匿名点赞者的名字也保留", (target or {}).get("reaction_users", {}).get("🎉") == ["匿名用户"], str(target))
     check("软删除后作者保留（供回复引用）", target is not None and target["author"] == "冒烟测试", str(target))
+    # The address is deliberately dropped here. The name has to stay so replies
+    # keep their `@mention` context, but nothing a tombstone does needs an
+    # address — and the commenter asked for the comment to be gone.
+    check("软删除后不再下发 IP", (target or {}).get("author_ip") is None,
+          str((target or {}).get("author_ip")))
+    check("但写作时的内容已清空，源码也不会泄露",
+          target is not None and target["content_html"] == "" and target["content"] == "",
+          str(target))
+    check("墓碑不再标记为可删除", (target or {}).get("can_delete") is False,
+          str((target or {}).get("can_delete")))
 
-    status, _ = call("DELETE", f"/comments/{root_id}", headers=anon)
-    check("重复删除被拒绝 (409)", status == 409, f"got {status}")
+    print("\n[10a] 令牌路径仍然可用")
+    # The address is the rule, but the one-time token is still accepted: it is
+    # what a reader holds after genuinely moving to another network, where the
+    # address can no longer vouch for them.
+    status, tokened = write(
+        "POST", "/comments", {"page": PAGE, "author": "换网的人", "content": "令牌路径"}
+    )
+    tokened_id = tokened["comment"]["id"]
+    status, dropped = call(
+        "DELETE",
+        f"/comments/{tokened_id}",
+        headers={"X-Delete-Token": tokened.get("delete_token"), **anon},
+    )
+    check("带正确令牌可删除 (200)", status == 200, f"got {status}")
+    check("无回复时硬删除", dropped.get("mode") == "hard", str(dropped))
 
     print("\n[10b] 无回复的评论直接删除")
     status, lonely = write(
