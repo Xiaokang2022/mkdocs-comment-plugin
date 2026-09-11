@@ -13,6 +13,11 @@
 .md-comment {
   /* Material design tokens, with fallbacks for non-Material themes. */
   --mkc-primary: var(--md-primary-fg-color, #4051b5);
+  /* The colour of *every highlight*: a focus ring, a hovered chip, the flash
+     when you jump to a comment. Taken from the theme's own link-hover colour
+     (`--md-accent-fg-color`) so a highlighted control reads exactly like a link
+     being pointed at. It used to be the primary colour, which made a focused
+     box look like a selected or branded element rather than a live one. */
   --mkc-accent: var(--md-accent-fg-color, #526cfe);
   --mkc-on-primary: var(--md-primary-bg-color, #ffffff);
   --mkc-fg: var(--md-default-fg-color, rgba(0, 0, 0, 0.87));
@@ -156,7 +161,7 @@ button.md-comment__reaction {
 }
 
 button.md-comment__reaction:hover {
-  border-color: var(--mkc-primary);
+  border-color: var(--mkc-accent);
 }
 
 /*
@@ -166,7 +171,7 @@ button.md-comment__reaction:hover {
  * and the emoji/count became invisible.
  */
 button.md-comment__reaction:not(.is-active):hover {
-  color: var(--mkc-primary);
+  color: var(--mkc-accent);
 }
 
 .md-comment__reaction.is-active {
@@ -186,8 +191,8 @@ button.md-comment__reaction:not(.is-active):hover {
 }
 
 .md-comment__form:focus-within {
-  border-color: var(--mkc-primary);
-  box-shadow: 0 0 0 0.05rem var(--mkc-primary);
+  border-color: var(--mkc-accent);
+  box-shadow: 0 0 0 0.05rem var(--mkc-accent);
 }
 
 .md-comment__form--reply {
@@ -268,7 +273,7 @@ button.md-comment__reaction:not(.is-active):hover {
 }
 
 .md-comment__identity:focus-within {
-  border-color: var(--mkc-primary);
+  border-color: var(--mkc-accent);
 }
 
 /* The '昵称' caption is the first thing to go when space runs out: the chip is

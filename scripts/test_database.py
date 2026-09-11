@@ -241,6 +241,87 @@ def test_tombstone_sweep() -> None:
               str(db.reaction_counts("comment", [g])))
 
 
+def test_purge_childless_tombstones() -> None:
+    """The startup sweep, which heals databases written by an older release.
+
+    Deleting the last reply clears the tombstone above it, so current code never
+    *creates* a childless tombstone. The sweep is not for that case — it is for
+    the state a database can arrive in from elsewhere: rows written before that
+    walk-up existed, or a backup restored from that era. Such a row renders as
+    「该评论已被删除」 with nothing under it, which a reader cannot tell apart
+    from a live bug.
+
+    The rows are therefore planted directly, since no API call can produce them.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = Database(str(Path(tmp) / "sweep2.db"))
+        page = "/legacy"
+
+        def plant(author: str, parent_id: str | None, deleted: bool = False) -> str:
+            comment_id = _make_comment(db, page, author, parent_id=parent_id)
+            if deleted:
+                db.soft_delete_comment(comment_id)
+            return comment_id
+
+        print("--- 无回复的墓碑会被清理（模拟旧版本留下的行）")
+        lonely = plant("孤独的墓碑", None, deleted=True)
+        healthy = plant("正常的评论", None)
+        check("清理前它确实在库里", db.get_comment(lonely) is not None)
+        removed = db.purge_childless_tombstones()
+        check("被清理的正是那一条", removed == [lonely], str(removed))
+        check("库里不再有它", db.get_comment(lonely) is None)
+        check("正常评论未受影响", db.get_comment(healthy) is not None)
+
+        print("--- 带有回复的墓碑必须保留")
+        holder = plant("还挂着回复的墓碑", None, deleted=True)
+        child = plant("回复", holder)
+        removed = db.purge_childless_tombstones()
+        check("没有清理任何东西", removed == [], str(removed))
+        check("墓碑仍在", db.get_comment(holder) is not None)
+        check("回复仍在", db.get_comment(child) is not None)
+
+        print("--- 墓碑链自底向上一起清掉")
+        top = plant("顶层墓碑", None, deleted=True)
+        mid = plant("中层墓碑", top, deleted=True)
+        bottom = plant("底层墓碑", mid, deleted=True)
+        removed = db.purge_childless_tombstones()
+        check("三层一次清完", sorted(removed) == sorted([bottom, mid, top]), str(removed))
+        check("一条都不剩", all(db.get_comment(i) is None for i in (top, mid, bottom)))
+
+        print("--- 清理时连同点赞一起丢弃")
+        liked = plant("有人点赞的墓碑", None, deleted=True)
+        db.toggle_reaction("comment", liked, "👍", "v1", display_name="点赞者")
+        check("点赞先写在上面",
+              db.reaction_counts("comment", [liked]).get(liked, {}).get("👍") == 1)
+        db.purge_childless_tombstones()
+        check("墓碑没了", db.get_comment(liked) is None)
+        check("点赞也没了",
+              db.reaction_counts("comment", [liked]).get(liked, {}) == {},
+              str(db.reaction_counts("comment", [liked])))
+
+        print("--- 幂等：再跑一次什么都不做")
+        check("第二次返回空", db.purge_childless_tombstones() == [])
+        check("第三次也返回空", db.purge_childless_tombstones() == [])
+        # The page keeps exactly the three rows that were never childless: the
+        # live comment, and the tombstone that still holds a reply.
+        check("只剩两行活着的评论加一个仍在用的墓碑",
+              db.count_comments(page)["total"] == 3,
+              str(db.count_comments(page)))
+        check("留下来的正是该留的",
+              db.get_comment(healthy) is not None
+              and db.get_comment(holder) is not None
+              and db.get_comment(child) is not None,
+              "healthy/holder/child")
+
+    print("--- 清扫已接到服务启动流程上")
+    # The sweep only heals an existing deployment if it actually runs. A test
+    # that calls it by hand would keep passing after someone removed the call.
+    main_py = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+    startup = main_py.split('@app.on_event("startup")', 1)[1].split("\n@app.", 1)[0]
+    check("启动时调用清扫", "purge_childless_tombstones()" in startup,
+          startup.strip()[:120])
+
+
 def test_purge_of_unknown_id() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         db = Database(str(Path(tmp) / "unknown.db"))
@@ -323,6 +404,8 @@ def main() -> int:
     test_anonymous_name_is_not_a_nickname()
     print()
     test_tombstone_sweep()
+    print()
+    test_purge_childless_tombstones()
     print()
     test_purge_of_unknown_id()
 

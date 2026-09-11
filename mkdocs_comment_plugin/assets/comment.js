@@ -374,7 +374,13 @@
       root.classList.add("md-comment--square");
     }
     if (CFG.accentColor) {
+      // Both tiers, not just the fills. `accent_color` is the operator saying
+      // "this is my accent", and a focus ring that stayed the theme's colour
+      // while every filled control used theirs would read as a bug. Left unset,
+      // the fills keep Material's primary and the highlights keep
+      // `--md-accent-fg-color` — the colour a link turns when you hover it.
       root.style.setProperty("--mkc-primary", CFG.accentColor);
+      root.style.setProperty("--mkc-accent", CFG.accentColor);
       var on = contrastOn(CFG.accentColor);
       if (on) {
         root.style.setProperty("--mkc-on-primary", on);
@@ -744,10 +750,17 @@
    */
   function commentHtml(comment, replies) {
     var deleted = comment.deleted;
-    // A token this browser still holds for the comment. Not the primary rule
-    // any more — see the delete button below — but it is what lets the "我"
-    // badge mark comments posted from this browser.
-    var mine = tokens()[comment.id];
+    // A one-time delete token this browser still holds for the comment. Not how
+    // ownership is decided any more — the server compares source addresses (see
+    // the delete button below) — but it is the fallback that keeps a comment
+    // deletable after the reader moved to another network.
+    var token = tokens()[comment.id];
+    // Whether the server recognised this comment as the reader's own, by the
+    // same address rule. This is what the "我" badge shows: it used to come from
+    // the stored token, which was wrong once identity became the address — a
+    // reader who cleared site data still owns their comments, and one who
+    // inherited a profile did not write them.
+    var isMine = !!comment.is_mine;
 
     // The source toggle sits at the far end of the meta row, which is the
     // comment's top-right corner. It is offered for every published comment
@@ -781,7 +794,7 @@
       meta +=
         '<span class="md-comment__reply-to">↩ ' + esc(comment.reply_to) + "</span>";
     }
-    if (mine) {
+    if (isMine) {
       meta += '<span class="md-comment__badge">' + esc(t("you")) + "</span>";
     }
     meta += timeHtml(comment.created_at) + sourceToggle;
@@ -837,7 +850,7 @@
       // `can_delete`. The browser no longer infers it from the nickname, nor
       // relies solely on a token it may have cleared — but a token it still
       // holds keeps working, because the server accepts either.
-      if (CFG.allowDelete && (comment.can_delete || mine)) {
+      if (CFG.allowDelete && (comment.can_delete || token)) {
         actions +=
           '<button type="button" class="md-comment__action md-comment__action--danger" ' +
           'data-act="delete">' + esc(t("remove")) + "</button>";

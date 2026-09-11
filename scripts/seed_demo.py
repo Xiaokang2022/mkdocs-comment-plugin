@@ -13,6 +13,13 @@ database is local, and the reason is worth stating: a reader's identity *is*
 their address, so every reaction this script sends would come from one visitor
 and the POSTs would toggle each other off. Seeding several named reactors means
 seeding several addresses, which only the database can do.
+
+Comments are posted through the API and then have their address rewritten,
+which sounds contradictory but is not: the POST is what runs validation,
+Markdown rendering and sanitising, and only the `client_ip` column is edited
+afterwards. Without that edit every seeded comment carries this machine's
+address, so a reader browsing the demo locally is the author of all of them —
+the「我」badge would light up on the whole page and the demo would show nothing.
 """
 
 from __future__ import annotations
@@ -154,8 +161,54 @@ class ReactionSeeder:
         print(f"  ... 直接写入 {len(self.rows)} 条表情（含各自独立的访客身份）")
 
 
+class CommentReaddresser:
+    """Give seeded comments distinct addresses, after the API has processed them.
+
+    The POST is what validates and renders the body; this only edits the
+    `client_ip` column afterwards. It matters because identity *is* the
+    address: left alone, every seeded comment would claim to have been written
+    by whoever runs the seeder, and a reader browsing the demo from that same
+    machine would be shown「我」on all of them — which is both wrong and makes
+    the badge look broken rather than informative.
+
+    `192.0.2.x` is TEST-NET-1, a range reserved for documentation, so a
+    synthetic address here can never collide with a real visitor.
+    """
+
+    def __init__(self) -> None:
+        self.path = local_database()
+        self.rows: list[tuple[str, str, str]] = []
+        if self.path is None:
+            print(
+                "  [注意] 数据库不可达，演示评论将保留本机地址；\n"
+                "        本机访问时它们会全部被标记为「我」。"
+            )
+
+    def add(self, comment_id: str, author: str) -> None:
+        try:
+            index = AUTHORS.index(author)
+        except ValueError:
+            return
+        self.rows.append((f"192.0.2.{index + 10}", f"ip-seed-cmt-{index:02d}", comment_id))
+
+    def flush(self) -> None:
+        if self.path is None or not self.rows:
+            return
+        conn = sqlite3.connect(self.path)
+        try:
+            conn.executemany(
+                "UPDATE comments SET client_ip = ?, visitor_id = ? WHERE id = ?",
+                self.rows,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        print(f"  ... 为 {len(self.rows)} 条评论分配了各自独立的来源地址")
+
+
 def main() -> None:
     root_ids: list[str] = []
+    readdress = CommentReaddresser()
     if COUNT:
         print(f"==> 向 {PAGE} 写入 {COUNT} 条演示评论 ({client.api})")
     else:
@@ -177,6 +230,7 @@ def main() -> None:
             {"page": PAGE, "author": author, "content": body, "parent_id": parent},
         )
         comment_id = created["comment"]["id"]
+        readdress.add(comment_id, author)
         if parent is None:
             root_ids.append(comment_id)
         print(f"  [{index + 1:>3}/{COUNT}] {author:<12} {'回复' if parent else '评论'} {comment_id[:8]}")
@@ -203,6 +257,9 @@ def main() -> None:
     seeder.flush()
 
     print(f"==> 完成：{len(root_ids)} 条根评论，已附加带头像的表情")
+
+    # Last, so the addresses are in place before anyone browses the page.
+    readdress.flush()
 
 
 if __name__ == "__main__":

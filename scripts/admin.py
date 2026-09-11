@@ -11,7 +11,9 @@ Usage::
     python scripts/admin.py purge-reactions <page>...   # 重置某页的表情互动
 
 A soft delete keeps the row and clears its content, so `purge-body` can never
-match it by text — `purge-deleted` removes those placeholders by id.
+match it by text — `purge-deleted` removes those placeholders by id. Only the
+ones that no longer hold a thread are removed; the server does the same sweep at
+startup, so this command is the manual version of it.
 
 Environment::
 
@@ -81,22 +83,54 @@ def cmd_purge_body(text: str, pages: list[str]) -> None:
 
 
 def cmd_purge_deleted(pages: list[str]) -> None:
-    """Remove soft-deleted placeholders, which carry no content to match on."""
+    """Remove the soft-deleted placeholders on these pages.
+
+    Deliberately not ``delete_tree``: that deletes a whole ``thread_id``, and a
+    tombstone shares its thread with the comments underneath it. Cleaning one up
+    used to take every reply with it — and for a tombstoned *reply* it took the
+    live root too. Replies are rendered by ``thread_id``, so a missing root does
+    not even show up as an error: the thread simply disappears.
+
+    A placeholder that still holds replies is therefore left alone and reported;
+    the server sweeps childless ones at startup anyway.
+    """
     removed = 0
+    kept = 0
     with sqlite3.connect(DB_PATH) as conn:
         for page in pages:
-            ids = [
-                row[0]
-                for row in conn.execute(
-                    "select id from comments where page = ? and deleted_at is not null",
-                    (page,),
-                )
-            ]
-            for comment_id in ids:
-                if delete_tree(comment_id):
-                    removed += 1
-                    print(f"  已清理 {page} -> {comment_id[:8]}")
-    print(f"==> 共清理 {removed} 条")
+            while True:
+                rows = [
+                    (row[0], row[1])
+                    for row in conn.execute(
+                        """
+                        SELECT c.id,
+                               (SELECT count(*) FROM comments k WHERE k.parent_id = c.id)
+                          FROM comments c
+                         WHERE c.page = ? AND c.deleted_at IS NOT NULL
+                        """,
+                        (page,),
+                    )
+                ]
+                childless = [cid for cid, kids in rows if not kids]
+                if not childless:
+                    # Only placeholders still holding a thread remain, and those
+                    # must stay. Reporting here means each one is named once.
+                    for cid, kids in rows:
+                        kept += 1
+                        print(f"  保留 {page} -> {cid[:8]}（仍挂着 {kids} 条回复）")
+                    break
+                for cid in childless:
+                    conn.execute(
+                        "DELETE FROM reactions WHERE target_type = 'comment' AND target_id = ?",
+                        (cid,),
+                    )
+                    if conn.execute("DELETE FROM comments WHERE id = ?", (cid,)).rowcount:
+                        removed += 1
+                        print(f"  已清理 {page} -> {cid[:8]}")
+                # A tombstone whose only child was another tombstone becomes
+                # childless in this pass, so go round again.
+        conn.commit()
+    print(f"==> 共清理 {removed} 条，保留 {kept} 条仍挂在主题上")
 
 
 def cmd_purge_reactions(pages: list[str]) -> None:

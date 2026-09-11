@@ -123,6 +123,12 @@ def serialize_comment(
     # having to guess from a stored token, which it may not have any more.
     # Not sent for a tombstone: there is nothing left to delete.
     can_delete = bool(settings.allow_delete and not deleted and owns_row(row, visitor))
+    # The same address rule answers "did I write this", which is what the "我"
+    # badge shows. Kept as its own field rather than reusing `can_delete`: the
+    # badge is about authorship, so a site with `allow_delete: false` must still
+    # label the reader's own comments. It survives deletion for the same reason —
+    # the text went away, the authorship did not.
+    is_mine = owns_row(row, visitor)
     return schemas.CommentOut(
         id=row["id"],
         page=row["page"],
@@ -141,6 +147,7 @@ def serialize_comment(
         updated_at=row.get("updated_at"),
         deleted=deleted,
         can_delete=can_delete,
+        is_mine=is_mine,
         # Reactions deliberately survive deletion. The text is gone, but the
         # thread this row anchors is kept — so the reactions already collected
         # on it stay visible rather than silently vanishing.
@@ -501,6 +508,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 @app.on_event("startup")
 def on_startup() -> None:
     db.delete_orphan_reactions()
+    # Self-healing: a tombstone with nothing under it is a permanent
+    # 「该评论已被删除」 line with empty space below it. Current code never
+    # creates one (deleting the last reply clears its parent), but a database
+    # left behind by an older release — or restored from an old backup — still
+    # carries them, and a reader has no way to tell that from a live bug.
+    swept = db.purge_childless_tombstones()
+    if swept:
+        logger.info("已清理 %d 条无回复的已删除占位", len(swept))
     logger.info("评论服务已启动，数据库：%s", settings.db_path)
     if settings.cors_origins == ["*"]:
         logger.warning("CORS 允许所有来源，生产环境建议设置 MKC_CORS_ORIGINS。")

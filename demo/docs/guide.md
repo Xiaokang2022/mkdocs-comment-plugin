@@ -47,7 +47,7 @@ comments: true
 
 | 配置项 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `accent_color` | str | 空 | 强调色，留空则跟随主题主色 |
+| `accent_color` | str | 空 | 强调色，留空则跟随主题（选中色取主题主色、高亮色取主题的链接悬停色） |
 | `avatar_style` | str | `initial` | `none` 可完全隐藏头像；未署名时用主题的用户图标 |
 | `avatar_shape` | str | `circle` | `circle` 或 `square` |
 | `density` | str | `comfortable` | `compact` 收紧行距，适合长楼 |
@@ -56,6 +56,15 @@ comments: true
 | `time_style` | str | `relative` | `absolute` 显示具体日期时间 |
 | `remember_author` | bool | `true` | 是否记住昵称 |
 | `reply_quote` | bool | `true` | 回复时是否自动带 `@提及` |
+
+配色分两层：**选中**（已点赞的胶囊填充、回复竖线、默认按钮）用主题主色，
+**高亮**（输入框聚焦的边框与光晕、昵称框聚焦、胶囊悬停）用主题里链接悬停时的颜色
+`--md-accent-fg-color`——把鼠标移到正文任意链接上看到的那个色。
+
+评论作者旁边的「我」标签由服务端按**来源地址**判定（`is_mine`），
+和能不能删除是同一条规则：清掉浏览器数据、换个浏览器都还是「我」，
+同一个出口下的其他人则不是。关掉 `allow_delete` 不会让标签消失——
+删不了不等于不是你写的。
 
 ## 本页面也有评论区
 

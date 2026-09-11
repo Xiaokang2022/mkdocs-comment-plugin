@@ -57,7 +57,7 @@ plugins:
       require_author: false   # 设为 true 则必须手动填写昵称
       allow_delete: true
       # ---- 外观与交互 ----
-      # accent_color: "#7c4dff" # 强调色（留空则跟随主题主色）
+      # accent_color: "#7c4dff" # 强调色（同时覆盖选中色与高亮色；留空则各自跟随主题）
       # avatar_style: initial  # initial | none
       # avatar_shape: circle   # circle | square
       # density: comfortable   # comfortable | compact

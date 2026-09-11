@@ -109,6 +109,15 @@ def main() -> int:
           repr(root.get("content")))
     check("原文本与渲染结果不同（切换才有意义）", root["content"] != html)
     check("下发删除令牌", bool(token))
+    # The "我" badge is decided the same way deletion is — by the request's
+    # address — instead of by a token this browser happens to still hold. It is
+    # its own field rather than a reuse of `can_delete`, because a deployment
+    # with `allow_delete: false` still has to label the reader's own comments.
+    check("自己的评论标记为「我」（按地址判定）", root.get("is_mine") is True,
+          str(root.get("is_mine")))
+    check("is_mine 与 can_delete 同源",
+          root.get("is_mine") == root.get("can_delete"),
+          f"is_mine={root.get('is_mine')} can_delete={root.get('can_delete')}")
 
     print("\n[2b] 转义与自动链接（回归）")
     status, escaped = write(
@@ -382,6 +391,11 @@ def main() -> int:
           str(target))
     check("墓碑不再标记为可删除", (target or {}).get("can_delete") is False,
           str((target or {}).get("can_delete")))
+    # ... but authorship does not change when the text is removed. Dropping the
+    # badge here would also strand a thread whose tombstoned root stayed on the
+    # page while its surviving replies kept theirs.
+    check("墓碑仍标记为「我」", (target or {}).get("is_mine") is True,
+          str((target or {}).get("is_mine")))
 
     print("\n[10a] 令牌路径仍然可用")
     # The address is the rule, but the one-time token is still accepted: it is

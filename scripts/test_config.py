@@ -189,6 +189,12 @@ def run() -> int:
     print("--- 挂载开关：只有宿主元素能决定是否挂载")
     mount_guard_checks(check)
 
+    print("--- 「我」标签：按地址判定，不看本地令牌")
+    identity_badge_checks(check)
+
+    print("--- 配色两级：选中色与高亮色各就各位")
+    palette_checks(check)
+
     print(f"\n{'=' * 46}")
     print(f"结果：{passed} 通过 / {failed} 失败")
     print(f"{'=' * 46}")
@@ -271,6 +277,124 @@ def mount_guard_checks(check) -> None:
         "pageSelector 不再作为缺少宿主时的兜底",
         not re.search(r"host\s*\|\|", body),
         "仍存在 host || ... 形式的兜底挂载",
+    )
+
+
+def identity_badge_checks(check) -> None:
+    """The「我」badge must follow the address rule, not a stored token.
+
+    It used to be driven by the per-comment delete token kept in localStorage.
+    That stopped describing reality the moment identity became the source
+    address: a reader who cleared site data still owned their comments but lost
+    the badge, while a reader who inherited a browser profile saw「我」on
+    comments they never wrote — the same comment both over- and under-claimed.
+
+    The server now answers the question in `is_mine`, computed by the one rule
+    that also decides deletion, and the widget must read that field. A source
+    check is the right shape here because a browser test cannot see the
+    difference: both versions render a badge.
+    """
+    body = JS_PATH.read_text(encoding="utf-8").split(
+        "function commentHtml(comment, replies)", 1
+    )[1]
+    body = body[: body.index("\n  }")]
+    badge = body.index("md-comment__badge")
+    # The condition is on the line above the markup it guards, so read both —
+    # checking only the `meta +=` line would pass for any condition at all.
+    condition = body[body.rindex("if (", 0, badge) : badge]
+
+    check("「我」标签读服务端的 is_mine", "isMine" in condition, condition.strip())
+    check("「我」标签不再自己看令牌", "tokens()" not in condition, condition.strip())
+
+    backend = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+    check(
+        "后端按来源地址算出 is_mine",
+        re.search(r"is_mine = owns_row\(row, visitor\)", backend) is not None,
+    )
+    check(
+        "is_mine 不依赖 allow_delete（否则关掉删除就没了标签）",
+        not re.search(r"is_mine\s*=.*allow_delete", backend),
+    )
+    check(
+        "is_mine 不依赖昵称",
+        not re.search(r"is_mine\s*=.*\bauthor\b", backend),
+    )
+
+
+CSS_PATH = ROOT / "mkdocs_comment_plugin" / "assets" / "comment.css"
+
+
+def css_block(selector: str) -> str:
+    """The declaration block of a top-level rule, matched by selector."""
+    source = CSS_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        rf"^\s*{re.escape(selector)}\s*\{{(.*?)\}}", source, re.S | re.M
+    )
+    if not match:
+        raise AssertionError(f"comment.css 里找不到 {selector}")
+    return match.group(1)
+
+
+def palette_checks(check) -> None:
+    """The widget lights things up two ways, and they are not the same colour.
+
+    *Selected* is a settled state (this pill is on, this button is the default)
+    and wears the site's primary. *Highlighted* is a momentary response (this
+    field has the caret, the pointer is over this pill) and wears the theme's
+    link-hover colour, so a focused box reads as live rather than as branded.
+
+    Collapsing the two back onto one variable would silently undo the visual
+    distinction the widget was built around, and nothing else would notice —
+    hence this test.
+    """
+    source = CSS_PATH.read_text(encoding="utf-8")
+
+    check(
+        "高亮色默认取主题的链接悬停色",
+        re.search(
+            r"--mkc-accent:\s*var\(--md-accent-fg-color,", source
+        )
+        is not None,
+        "--mkc-accent 未回退到 --md-accent-fg-color",
+    )
+    check(
+        "选中色默认取主题主色",
+        re.search(r"--mkc-primary:\s*var\(--md-primary-fg-color,", source)
+        is not None,
+        "--mkc-primary 未回退到 --md-primary-fg-color",
+    )
+
+    focused = css_block(".md-comment__form:focus-within")
+    check("输入框聚焦用高亮色", "var(--mkc-accent)" in focused, focused)
+    check(
+        "昵称框聚焦用高亮色",
+        "var(--mkc-accent)"
+        in css_block(".md-comment__identity:focus-within"),
+    )
+    check(
+        "表情胶囊悬停的边框用高亮色",
+        "var(--mkc-accent)"
+        in css_block("button.md-comment__reaction:hover"),
+    )
+    check(
+        "表情胶囊悬停的文字用高亮色",
+        "var(--mkc-accent)"
+        in css_block("button.md-comment__reaction:not(.is-active):hover"),
+    )
+
+    active = css_block(".md-comment__reaction.is-active")
+    check("已选中的胶囊仍用主色", "var(--mkc-primary)" in active, active)
+
+    # `accent_color` is the operator saying "this is my accent", so it must move
+    # both tiers; leaving highlights on the theme colour would look like a bug.
+    theme = JS_PATH.read_text(encoding="utf-8")
+    body = theme.split("function applyTheme(root)", 1)[1]
+    body = body[: body.index("\n  }")]
+    check(
+        "accent_color 同时覆盖选中色与高亮色",
+        '"--mkc-primary", CFG.accentColor' in body
+        and '"--mkc-accent", CFG.accentColor' in body,
+        body,
     )
 
 

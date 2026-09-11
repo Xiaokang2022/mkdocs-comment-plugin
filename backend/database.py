@@ -425,6 +425,50 @@ class Database:
             conn.execute("DELETE FROM comments WHERE thread_id = ?", (thread_id,))
             return batch
 
+    def purge_childless_tombstones(self) -> List[str]:
+        """Drop every tombstone that no longer holds a thread together.
+
+        A tombstone is a placeholder: it exists so the replies underneath keep a
+        parent to sit under and their `@mention` keeps resolving. With no replies
+        left it anchors nothing, and all a reader sees is a permanent
+        「该评论已被删除」 line with empty space below it — the exact thing that
+        makes deleting a comment look like it failed.
+
+        Normal deletions never leave one behind: :meth:`delete_comment_only`
+        walks up the parent chain and clears it as the last reply goes. This
+        sweep exists for the states that are *not* normal — rows left by a
+        release that predates that walk, a database restored from an old backup,
+        or a hand-edited row. It runs once at startup so an upgraded deployment
+        heals itself instead of displaying the breakage forever.
+
+        Repeats until nothing changes, because clearing one tombstone can orphan
+        the tombstone above it. Idempotent, and cheap: the table holds comments,
+        not events.
+        """
+        removed: List[str] = []
+        with self.connect() as conn:
+            while True:
+                ids = [
+                    row["id"]
+                    for row in conn.execute(
+                        """
+                        SELECT c.id
+                          FROM comments c
+                         WHERE c.deleted_at IS NOT NULL
+                           AND NOT EXISTS (
+                                 SELECT 1 FROM comments k WHERE k.parent_id = c.id
+                           )
+                      ORDER BY c.created_at ASC
+                        """
+                    )
+                ]
+                if not ids:
+                    break
+                # Each pass deletes at least one row, so this terminates; the
+                # loop is what collapses a chain of tombstones bottom-up.
+                self._delete_rows(conn, ids, removed)
+        return removed
+
     # ------------------------------------------------------------------ #
     # page statistics
     # ------------------------------------------------------------------ #

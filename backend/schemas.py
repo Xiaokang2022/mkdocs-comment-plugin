@@ -83,6 +83,15 @@ class CommentOut(BaseModel):
     # lost. False once the comment is a tombstone — there is nothing left to
     # delete.
     can_delete: bool = False
+    # Whether the caller *wrote* this comment, by the same address rule. Separate
+    # from `can_delete` on purpose: the "我" badge marks authorship, so it must
+    # not disappear when a deployment turns deletion off, which is all
+    # `can_delete` would report then.
+    #
+    # Unlike `can_delete` it stays true on a tombstone: the text was removed, but
+    # who wrote it did not change — and a thread whose root lost its badge while
+    # its surviving replies kept theirs would just look broken.
+    is_mine: bool = False
     reactions: Dict[str, int] = Field(default_factory=dict)
     my_reactions: List[str] = Field(default_factory=list)
     # emoji -> display names, in the order they reacted (for the hover tooltip).
