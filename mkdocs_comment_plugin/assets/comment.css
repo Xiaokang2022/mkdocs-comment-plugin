@@ -29,6 +29,11 @@
   --mkc-surface: var(--md-default-fg-color--lightest);
   /* Material's elevation tokens, so shadows match the rest of the theme. */
   --mkc-overlay: var(--md-shadow-z2, 0 0.4rem 1rem rgba(0, 0, 0, 0.12));
+  /* Danger, for text and borders that sit *on the page* — so the dark palette
+     makes it lighter (see the `slate` override below) to keep it readable
+     against a dark surface. A filled bubble holding white text needs the
+     opposite, which is why the toast does not use this variable; see the toast
+     section at the bottom of this file. */
   --mkc-danger: #d32f2f;
   /* Radius ladder.
      Material keeps its own controls nearly square — `.md-button`, tables and
@@ -948,34 +953,77 @@ button.md-comment__reaction:not(.is-active):hover {
   background: none;
 }
 
-/* ----------------------------------------------------------------- toast */
+/* ----------------------------------------------------------------- toast
+   A transient confirmation ("评论已发布", "评论已删除") or an error message.
+
+   Anchored to the bottom of the viewport, in the inline-end corner, with the
+   same `.8rem` inset Material uses for its own `.md-dialog` — the bubble shown
+   after you copy a code block. Both are the same kind of thing (a short,
+   self-dismissing status message), so they belong in the same corner rather
+   than one centred and one right-aligned, which read as two different systems.
+
+   `inset-inline-end` rather than `right` so an RTL site mirrors it to the
+   other corner exactly like the theme's dialog does.
+
+   The radius and elevation are written out instead of taken from the token
+   block above, and that is deliberate: the toast is appended to <body>, not
+   inside `.md-comment`, so every `--mkc-*` variable is undefined here. A
+   `var()` with no fallback makes the whole declaration invalid at computed
+   value time, which silently produced square corners and no shadow at all.
+   These are Material's own numbers for that dialog, and `--md-shadow-z3` is a
+   root-level token, so it does resolve outside the widget. */
 .md-comment__toast {
   position: fixed;
   z-index: 1000;
-  bottom: 1.2rem;
-  left: 50%;
-  max-width: calc(100vw - 2rem);
-  padding: 0.5rem 1rem;
-  border-radius: var(--mkc-radius-overlay);
-  /* Inverted surface, exactly like Material's own snackbar. */
+  inset-inline-end: 0.8rem;
+  bottom: 0.8rem;
+  /* `min()` so the minimum can never win over the maximum on a narrow screen:
+     min-width beats max-width in the cascade, which would overflow the viewport. */
+  min-width: min(11.1rem, calc(100vw - 1.6rem));
+  max-width: calc(100vw - 1.6rem);
+  /* Padding, radius and minimum width are taken from Material's `.md-dialog` so
+     the two bubbles are the same box rather than merely in the same corner. */
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.1rem;
+  /* Inverted surface, exactly like Material's own dialog. */
   background: var(--md-default-fg-color, rgba(0, 0, 0, 0.87));
   color: var(--md-default-bg-color, #ffffff);
-  box-shadow: var(--mkc-overlay);
+  box-shadow: var(--md-shadow-z3, 0 0.4rem 1rem rgba(0, 0, 0, 0.25));
+  /* The one metric deliberately NOT copied: Material's dialog message is
+     `0.5rem` (10px at its 20px root), which it can afford because "已复制" is
+     two characters. These messages are whole sentences — and the failure ones
+     are the ones a reader most needs to read — so they stay at the widget's
+     body size. A slightly taller bubble, not a squint. */
   font-size: 0.7rem;
   opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, 1rem);
+  transform: translateY(100%);
   transition: opacity 200ms, transform 200ms;
 }
 
 .md-comment__toast.is-visible {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: translateY(0);
 }
 
 .md-comment__toast--error {
-  background: var(--mkc-danger);
+  /* Written out rather than taken from `--mkc-danger`: that variable is
+     declared on `.md-comment`, and this element lives on <body>, so a bare
+     `var(--mkc-danger)` resolves to nothing and silently leaves the normal
+     surface in place — an error message that looks like a success message.
+
+     It is also a different *kind* of value from the widget's danger colour.
+     `--mkc-danger` is for text and borders sitting on the page, so it gets
+     lighter under the dark palette (#ef5350). A filled bubble needs the
+     opposite: the fill must be dark enough for white text, so the dark palette
+     goes darker rather than lighter. Keyed off `data-md-color-scheme` on <body>,
+     which is the hook the theme itself uses for its own per-palette overrides. */
+  background: #d32f2f;
   color: #ffffff;
+}
+
+body[data-md-color-scheme="slate"] .md-comment__toast--error {
+  background: #b71c1c;
 }
 
 /* ---------------------------------------------------------- reaction tip

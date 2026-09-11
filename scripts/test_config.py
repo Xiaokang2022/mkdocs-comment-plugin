@@ -23,6 +23,7 @@ pin the contract down without needing a browser:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import sys
@@ -195,6 +196,9 @@ def run() -> int:
     print("--- 配色两级：选中色与高亮色各就各位")
     palette_checks(check)
 
+    print("--- 提示气泡：与主题的「已复制」同位置、同外观")
+    toast_checks(check)
+
     print(f"\n{'=' * 46}")
     print(f"结果：{passed} 通过 / {failed} 失败")
     print(f"{'=' * 46}")
@@ -325,14 +329,146 @@ CSS_PATH = ROOT / "mkdocs_comment_plugin" / "assets" / "comment.css"
 
 
 def css_block(selector: str) -> str:
-    """The declaration block of a top-level rule, matched by selector."""
+    """The declaration block of a top-level rule, matched by selector.
+
+    Comments are stripped. They are prose about the rule — and prose that
+    naturally quotes the very token names these tests ban ("it used to be
+    `var(--mkc-danger)`") would otherwise make a check pass or fail on its own
+    explanation rather than on the code.
+    """
     source = CSS_PATH.read_text(encoding="utf-8")
     match = re.search(
         rf"^\s*{re.escape(selector)}\s*\{{(.*?)\}}", source, re.S | re.M
     )
     if not match:
         raise AssertionError(f"comment.css 里找不到 {selector}")
-    return match.group(1)
+    return re.sub(r"/\*.*?\*/", "", match.group(1), flags=re.S)
+
+
+def _rem(value: str | None) -> float | None:
+    """`".8rem"` / `"0.8rem"` -> `0.8`, so the two spellings compare equal."""
+    if not value:
+        return None
+    match = re.match(r"([0-9]*\.?[0-9]+)rem$", value.strip())
+    return float(match.group(1)) if match else None
+
+
+def theme_dialog_insets() -> dict[str, str] | None:
+    """Read `.md-dialog`'s corner offsets out of the installed Material theme.
+
+    Material's `.md-dialog` is the bubble it shows after you copy a code block
+    ("已复制"), and the widget's toast deliberately sits in the same corner with
+    the same inset. Copying a number from another project means it can go stale
+    without anyone noticing, which is the same problem `test_icons.py` solves for
+    the inlined icons — so this reads the installed theme and compares, rather
+    than trusting the literal.
+
+    Returns ``None`` when Material is not installed, since the widget itself does
+    not depend on the theme.
+    """
+    spec = importlib.util.find_spec("material")
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    for base in spec.submodule_search_locations:
+        sheets = Path(base) / "templates" / "assets" / "stylesheets"
+        if not sheets.is_dir():
+            continue
+        for sheet in sheets.glob("main*.css"):
+            text = sheet.read_text(encoding="utf-8", errors="replace")
+            insets: dict[str, str] = {}
+            # Every `.md-dialog{…}` rule, not just the first: the offsets live in
+            # one rule and the logical-direction split in others. The value may
+            # also be the last thing before `}`, with no trailing semicolon —
+            # minified CSS drops it — so the separator must be optional.
+            for block in re.findall(r"\.md-dialog\{(.*?)\}", text, re.S):
+                for name, value in re.findall(r"(bottom|right|left):([^;}]+)", block):
+                    insets.setdefault(name, value.strip())
+            if insets:
+                return insets
+    return None
+
+
+def toast_checks(check) -> None:
+    """The status bubble must match Material's own, and must survive on <body>.
+
+    Two things are being pinned here, and the second is the important one.
+
+    *Placement*: `toast()` appends its node to `<body>`, so the bubble lands in
+    the corner, outside the widget's own layout. Material puts its "已复制"
+    confirmation there too, and two self-dismissing status messages drifting to
+    different corners read as two unrelated systems.
+
+    *Token scope*: because the node is on `<body>` and not inside `.md-comment`,
+    every `--mkc-*` custom property is *undefined* on it. A `var()` with no
+    fallback makes the whole declaration invalid at computed-value time, which
+    happens silently — the first version of this rule lost both its border radius
+    and its elevation that way, and the error variant lost its red background, so
+    a failure looked exactly like a success. Hence the ban below: only root-level
+    `--md-*` tokens and literal values are allowed here.
+    """
+    block = css_block(".md-comment__toast")
+    declarations = " ".join(block.split())
+
+    check(
+        "提示框不再依赖 --mkc-* 变量（它挂在 body 上，那些变量根本不生效）",
+        "--mkc-" not in declarations,
+        [line.strip() for line in block.splitlines() if "--mkc-" in line],
+    )
+    check(
+        "提示框只使用根级别的 --md-* 变量",
+        all(token in ("--md-default-fg-color", "--md-default-bg-color", "--md-shadow-z3")
+            for token in re.findall(r"var\((--md-[a-z0-9-]+)", declarations)),
+        re.findall(r"var\((--md-[a-z0-9-]+)", declarations),
+    )
+    check("提示框自带圆角，不靠变量", "border-radius:" in declarations)
+    check("提示框自带阴影，不靠变量", "box-shadow:" in declarations)
+    check(
+        "提示框宽度有上限，窄屏不会溢出",
+        "max-width: calc(100vw - 1.6rem)" in declarations
+        and "min-width: min(11.1rem, calc(100vw - 1.6rem))" in declarations,
+        declarations,
+    )
+    # `inset-inline-end` so an RTL site mirrors it, exactly like the theme does
+    # with `[dir=rtl] .md-dialog { left: … }`.
+    check(
+        "提示框用逻辑属性贴住行尾（RTL 会镜像到另一边）",
+        "inset-inline-end: 0.8rem" in declarations and "\n  left:" not in block,
+        declarations,
+    )
+
+    insets = theme_dialog_insets()
+    if insets is None:
+        print("  [SKIP] 未安装 Material 主题，跳过与主题 `.md-dialog` 的位置对照")
+    else:
+        # Compared as numbers, not as strings: the theme writes `.8rem` and the
+        # widget writes `0.8rem`, which are the same length spelled two ways.
+        # Pinning the string would fail on the next theme release for no reason.
+        theme_bottom = _rem(insets.get("bottom"))
+        check(
+            f"与主题 `.md-dialog` 的下边距一致（主题为 {insets.get('bottom')}）",
+            theme_bottom == 0.8,
+            f"theme={insets} ours=0.8rem",
+        )
+        check(
+            "提示框与主题同角（行尾对齐，不是居中）",
+            "inset-inline-end: 0.8rem" in declarations and "left: 50%" not in declarations,
+            declarations,
+        )
+
+    # The error variant is not allowed to reach for `--mkc-danger` either, and
+    # its fill has to be a literal, because on <body> the variable is dead.
+    error = css_block(".md-comment__toast--error")
+    check("错误提示不依赖 --mkc-danger", "--mkc-danger" not in error, error)
+    check(
+        "错误提示是实心红底白字",
+        "background: #d32f2f" in " ".join(error.split()) and "color: #ffffff" in error,
+        error,
+    )
+    # A filled bubble and the widget's text-level danger colour need opposite
+    # treatment under the dark palette: text must get lighter, a fill holding
+    # white text must get darker. Sharing one token would get one of them wrong.
+    slate = css_block('body[data-md-color-scheme="slate"] .md-comment__toast--error')
+    check("深色配色下错误提示反而更深（白字才压得住）", "background: #b71c1c" in slate, slate)
 
 
 def palette_checks(check) -> None:
