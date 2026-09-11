@@ -1,0 +1,975 @@
+/* ==========================================================================
+   MkDocs Comment Plugin — Material for MkDocs compatible stylesheet.
+
+   Design rules
+   ------------
+   1. All colours come from the theme's own custom properties, so the widget
+      follows light/slate palettes and custom brand colours with no
+      theme-specific code.
+   2. Markdown content is rendered through Material's `.md-typeset` and actions
+      reuse `.md-button`, so only the widget chrome is defined below.
+   ========================================================================== */
+
+.md-comment {
+  /* Material design tokens, with fallbacks for non-Material themes. */
+  --mkc-primary: var(--md-primary-fg-color, #4051b5);
+  --mkc-accent: var(--md-accent-fg-color, #526cfe);
+  --mkc-on-primary: var(--md-primary-bg-color, #ffffff);
+  --mkc-fg: var(--md-default-fg-color, rgba(0, 0, 0, 0.87));
+  --mkc-fg-light: var(--md-default-fg-color--light, rgba(0, 0, 0, 0.54));
+  --mkc-fg-lighter: var(--md-default-fg-color--lighter, rgba(0, 0, 0, 0.32));
+  --mkc-bg: var(--md-default-bg-color, #ffffff);
+  --mkc-border: var(--md-default-fg-color--lightest, rgba(0, 0, 0, 0.07));
+  /* Translucent tint: light grey on a light palette, subtle panel on slate. */
+  --mkc-surface: var(--md-default-fg-color--lightest);
+  /* Material's elevation tokens, so shadows match the rest of the theme. */
+  --mkc-overlay: var(--md-shadow-z2, 0 0.4rem 1rem rgba(0, 0, 0, 0.12));
+  --mkc-danger: #d32f2f;
+  /* Radius ladder.
+     Material keeps its own controls nearly square — `.md-button`, tables and
+     even its dialog are all `.1rem`. Applying that value everywhere was a
+     mistake: it flattened the small inline pills, so a reaction with an emoji
+     and a count read as a tiny box rather than a chip.
+
+     The ladder separates four kinds of surface instead of one blanket value:
+       sm        controls that should sink into the theme (buttons, text actions)
+       (base)    panels: comment cards, the composer, previews
+       overlay   floating panels that sit above the page
+       pill      inline chips: reactions, stats, tags */
+  --mkc-radius-sm: 0.1rem;
+  --mkc-radius: 0.2rem;
+  --mkc-radius-overlay: 0.4rem;
+  --mkc-radius-pill: 999px;
+
+  /* Anchors the reaction tooltip, which is positioned inside this element. */
+  position: relative;
+  clear: both;
+  margin: 3rem 0 1rem;
+  color: var(--mkc-fg);
+  font-family: var(--md-text-font-family, inherit);
+  font-size: 0.8rem;
+  line-height: 1.6;
+  text-align: left;
+}
+
+body[data-md-color-scheme="slate"] .md-comment {
+  --mkc-danger: #ef5350;
+}
+
+.md-comment *,
+.md-comment *::before,
+.md-comment *::after {
+  box-sizing: border-box;
+}
+
+.md-comment [hidden] {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------------- header */
+.md-comment__head {
+  display: flex;
+  align-items: center;
+  padding-bottom: 0.6rem;
+  margin-bottom: 1.2rem;
+  border-bottom: 0.05rem solid var(--mkc-border);
+}
+
+.md-comment__title {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  color: var(--mkc-fg);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* ------------------------------------------------------------ stat pills */
+/* Material supplies `.md-icon` (a span wrapping a `currentColor` svg) and
+   sizes it at 1.2rem for its own controls. Reusing the class keeps our icons
+   tinted by the theme; only the metrics need restating for a 0.7rem pill. */
+.md-comment .md-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.md-comment .md-icon svg {
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.md-comment__stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 1.2rem;
+}
+
+.md-comment__divider {
+  width: 0.05rem;
+  height: 1rem;
+  margin: 0 0.15rem;
+  background: var(--mkc-border);
+}
+
+/* Reaction pills are shared by the stats bar and individual comments. These are
+   the widget's chips: emoji + count in one capsule, so they stay fully round. */
+.md-comment__reaction,
+.md-comment__stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.5rem;
+  padding: 0 0.55rem;
+  border: 0.05rem solid var(--mkc-border);
+  border-radius: var(--mkc-radius-pill);
+  background: var(--mkc-bg);
+  color: var(--mkc-fg-light);
+  font-family: inherit;
+  font-size: 0.7rem;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: background-color 125ms, border-color 125ms, color 125ms;
+}
+
+.md-comment__stat {
+  border-color: transparent;
+  background: var(--mkc-surface);
+}
+
+.md-comment__stat strong,
+.md-comment__reaction-count {
+  font-weight: 700;
+}
+
+.md-comment__stat strong {
+  color: var(--mkc-fg);
+}
+
+button.md-comment__reaction {
+  cursor: pointer;
+}
+
+button.md-comment__reaction:hover {
+  border-color: var(--mkc-primary);
+}
+
+/*
+ * `button.md-comment__reaction:hover` outranks `.is-active` on specificity, so
+ * the foreground is only tinted for pills that are *not* active. Without this,
+ * hovering an active pill painted its text the same colour as its background
+ * and the emoji/count became invisible.
+ */
+button.md-comment__reaction:not(.is-active):hover {
+  color: var(--mkc-primary);
+}
+
+.md-comment__reaction.is-active {
+  border-color: var(--mkc-primary);
+  background: var(--mkc-primary);
+  color: var(--mkc-on-primary);
+}
+
+/* ------------------------------------------------------------------ form */
+.md-comment__form {
+  margin: 0 0 1.75rem;
+  padding: 0.45rem 0.7rem 0.5rem;
+  border: 0.05rem solid var(--mkc-border);
+  border-radius: var(--mkc-radius);
+  background: var(--mkc-bg);
+  transition: border-color 150ms, box-shadow 150ms;
+}
+
+.md-comment__form:focus-within {
+  border-color: var(--mkc-primary);
+  box-shadow: 0 0 0 0.05rem var(--mkc-primary);
+}
+
+.md-comment__form--reply {
+  margin: 0.75rem 0 0;
+  padding: 0.35rem 0.6rem 0.4rem;
+}
+
+/* The prose area is borderless: the panel itself is the boundary, which keeps
+   the whole composer down to a single visible outline. */
+.md-comment__input {
+  display: block;
+  width: 100%;
+  min-height: 4.4rem;
+  margin: 0;
+  padding: 0.4rem 0.2rem 0.25rem;
+  border: 0;
+  background: none;
+  color: var(--mkc-fg);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.6;
+  resize: vertical;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.md-comment__input::placeholder {
+  color: var(--mkc-fg-lighter);
+}
+
+.md-comment__input:focus {
+  outline: none;
+}
+
+/* One control bar beneath the prose: identity, emoji trigger and hint on the
+   left, the commit actions on the right. */
+.md-comment__bar {
+  /* Anchors the composer's emoji picker, which floats over the prose rather
+     than pushing the composer taller. */
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding-top: 0.4rem;
+  border-top: 0.05rem solid var(--mkc-border);
+}
+
+/* A chip rather than an underline: at this size an underlined box reads as
+   uneditable body text rather than a field. */
+/* A filled chip, not a panel: the pill shape is what marks it as an editable
+   inline control rather than a boxed field. */
+.md-comment__identity {
+  display: inline-flex;
+  flex: 0 1 15rem;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  height: 1.6rem;
+  padding: 0 0.55rem;
+  border: 0.05rem solid transparent;
+  border-radius: var(--mkc-radius-pill);
+  background: var(--mkc-surface);
+  transition: border-color 150ms;
+}
+
+.md-comment__identity:hover {
+  border-color: var(--mkc-border);
+}
+
+.md-comment__identity:focus-within {
+  border-color: var(--mkc-primary);
+}
+
+.md-comment__label {
+  flex: none;
+  color: var(--mkc-fg-lighter);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Carries no border of its own — the chip around it is the affordance. */
+.md-comment__field {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--mkc-fg);
+  font-family: inherit;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.md-comment__field::placeholder {
+  color: var(--mkc-fg-lighter);
+}
+
+.md-comment__field:focus {
+  outline: none;
+}
+
+.md-comment__field--error {
+  color: var(--mkc-danger);
+}
+
+/* `:has()` lights the chip up for an invalid field without extra JS state. */
+.md-comment__identity:has(.md-comment__field--error) {
+  border-color: var(--mkc-danger);
+}
+
+.md-comment__spacer {
+  flex: 1 1 auto;
+}
+
+.md-comment__hint {
+  color: var(--mkc-fg-lighter);
+  font-size: 0.62rem;
+  white-space: nowrap;
+}
+
+.md-comment__hint--error {
+  color: var(--mkc-danger);
+}
+
+/* The composer's emoji trigger is the same ghost icon a comment uses, so the
+   form and the thread read as one visual language. */
+.md-comment__emoji {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--mkc-radius);
+  background: none;
+  color: var(--mkc-fg-lighter);
+  cursor: pointer;
+  transition: background-color 125ms, color 125ms;
+}
+
+.md-comment__emoji svg {
+  display: block;
+  width: 0.9rem;
+  height: 0.9rem;
+}
+
+.md-comment__emoji:hover {
+  background: var(--mkc-surface);
+  color: var(--mkc-fg);
+}
+
+/*
+ * Material sizes `.md-button` for hero CTAs — 2em of side padding and ~47px
+ * tall. Inside the widget that dominates the composer, so only the metrics are
+ * restated here; colour, border and hover still come from the theme.
+ * (0,3,0) outranks Material's `.md-typeset .md-button` (0,2,0).
+ */
+.md-typeset .md-comment .md-button {
+  display: inline-flex;
+  align-items: center;
+  height: 1.6rem;
+  padding: 0 0.7rem;
+  border-width: 0.05rem;
+  /* Deliberately the flat tier: these sit beside Material's own buttons and
+     should be indistinguishable from them. */
+  border-radius: var(--mkc-radius-sm);
+  font-size: 0.68rem;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Compact text/icon actions under a comment (reply, react, delete). */
+.md-comment__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.5rem;
+  margin: 0;
+  padding: 0 0.4rem;
+  border: 0;
+  border-radius: var(--mkc-radius-sm);
+  background: none;
+  color: var(--mkc-fg-lighter);
+  font-family: inherit;
+  font-size: 0.65rem;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 125ms, color 125ms;
+}
+
+.md-comment__action:hover {
+  background: var(--mkc-bg);
+  color: var(--mkc-fg);
+}
+
+.md-comment__action--danger:hover {
+  color: var(--mkc-danger);
+}
+
+.md-comment__action--icon {
+  padding: 0 0.3rem;
+}
+
+.md-comment__action svg {
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+/* ---------------------------------------------------------- emoji picker
+   Always an overlay, never an in-flow block: opening it must not reflow the
+   thread or inflate the composer. Both anchors — a comment's action row and a
+   composer's control bar — drop the panel *below* the trigger, so a composer
+   picker never hides the text being written. */
+.md-comment__picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem;
+  width: 15.5rem;
+  padding: 0.35rem;
+  border: 0.05rem solid var(--mkc-border);
+  /* Floating tier: a panel hanging over the prose reads as a separate layer
+     when its corners are softer than the cards it covers. */
+  border-radius: var(--mkc-radius-overlay);
+  background: var(--mkc-bg);
+  box-shadow: var(--mkc-overlay);
+}
+
+.md-comment__actions .md-comment__picker {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 0.3rem);
+  /* The frontend aligns `left` to the trigger button; this is the fallback for
+     when positioning never runs. */
+  left: 0.4rem;
+  max-width: calc(100vw - 3rem);
+}
+
+.md-comment__bar .md-comment__picker {
+  position: absolute;
+  z-index: 6;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  max-width: calc(100vw - 3rem);
+}
+
+/* Flipped over its trigger when there is no room below (see `placePicker`). */
+.md-comment__actions .md-comment__picker--above {
+  top: auto;
+  bottom: calc(100% + 0.3rem);
+}
+
+.md-comment__bar .md-comment__picker--above {
+  top: auto;
+  bottom: calc(100% + 0.4rem);
+}
+
+.md-comment__picker button {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  /* One step inside the panel's radius, so the cells still nest inside it. */
+  border-radius: var(--mkc-radius);
+  background: none;
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 125ms, transform 125ms;
+}
+
+.md-comment__picker button:hover {
+  background: var(--mkc-surface);
+  transform: scale(1.15);
+}
+
+/* -------------------------------------------------------------- preview */
+.md-comment__preview {
+  margin-top: 0.6rem;
+  padding: 0.65rem 0.85rem;
+  border: 0.05rem solid var(--mkc-border);
+  border-radius: var(--mkc-radius);
+  background: var(--mkc-bg);
+}
+
+/* ------------------------------------------------------------ list/item
+   The widget is appended inside `.md-content__inner`, which is itself
+   `.md-typeset`, so Material's element selectors match the widget's own markup.
+   Those rules are direction-prefixed and therefore quite specific:
+
+     [dir="ltr"] .md-typeset ul     { margin-left: 0.625em }   (0,2,1)
+     [dir="ltr"] .md-typeset ul li  { margin-left: 1.25em }    (0,2,2)
+
+   A plain `.md-comment__list` (0,1,0) or `.md-typeset .md-comment__item`
+   (0,2,0) is outranked, which staggered the comment column by 10px + 20px.
+   Scoping through `.md-typeset .md-comment` reaches (0,3,0) and wins. */
+.md-typeset .md-comment .md-comment__list,
+.md-typeset .md-comment .md-comment__replies,
+.md-typeset .md-comment .md-comment__item {
+  margin-right: 0;
+  margin-left: 0;
+}
+
+.md-typeset .md-comment .md-comment__list,
+.md-typeset .md-comment .md-comment__replies {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+/* Each comment is a panel: a translucent tint marks the block without the hard
+   edges of a full card border. The radius stays in the flat tier so a stack of
+   comments does not read as a stack of bubbles. */
+.md-typeset .md-comment .md-comment__item {
+  display: flex;
+  gap: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  border: 0;
+  border-radius: var(--mkc-radius);
+  background: var(--mkc-surface);
+  list-style: none;
+}
+
+.md-comment__item.is-deleted {
+  opacity: 0.75;
+}
+
+.md-comment__item.is-highlight {
+  animation: mkc-flash 1.6s ease-out;
+}
+
+@keyframes mkc-flash {
+  from {
+    box-shadow: 0 0 0 0.15rem var(--mkc-accent);
+  }
+  to {
+    box-shadow: 0 0 0 0.15rem transparent;
+  }
+}
+
+.md-comment__avatar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0.05rem var(--mkc-border);
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* An unnamed commenter gets the theme's account glyph on a neutral disc. The
+   background comes from the palette rather than a hash, so every anonymous
+   avatar is identical and reads as the same placeholder. */
+.md-comment__avatar--anonymous {
+  background: var(--mkc-surface);
+  color: var(--mkc-fg-light);
+}
+
+/* Needs the widget prefix to beat `.md-comment .md-icon svg` (0,2,1) — an
+   avatar glyph is sized to its disc, not to the 0.85rem used inline. */
+.md-comment .md-comment__avatar .md-icon svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.md-comment__main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.md-comment__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin-bottom: 0.25rem;
+}
+
+.md-comment__author {
+  color: var(--mkc-fg);
+  font-size: 0.72rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+/* The address of an unnamed commenter, trailing their name.
+   Deliberately not a chip. A bordered, filled badge pulled the eye away from the
+   name it belongs to and was the loudest thing in the row — but an address is
+   secondary information, only needed when telling two anonymous comments apart.
+   So it keeps the theme's code font, which makes it read as machine data rather
+   than as part of the name, and drops every other cue: no box, no border, the
+   faintest text colour, and smaller than the timestamp next to it. */
+.md-comment__ip {
+  color: var(--mkc-fg-lighter);
+  font-family: var(--md-code-font-family);
+  font-size: 0.58rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.md-comment__badge {
+  padding: 0 0.3rem;
+  border-radius: var(--mkc-radius-pill);
+  background: var(--mkc-primary);
+  color: var(--mkc-on-primary);
+  font-size: 0.55rem;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.md-comment__reply-to {
+  color: var(--mkc-fg-lighter);
+  font-size: 0.65rem;
+}
+
+/* The timestamp trails the author rather than being pushed to the far edge, so
+   the meta line stays one compact, left-aligned unit. */
+.md-comment__time {
+  color: var(--mkc-fg-lighter);
+  font-size: 0.65rem;
+}
+
+.md-comment__time::before {
+  content: "·";
+  margin-right: 0.35rem;
+}
+
+/* Actions are pulled left by their own padding so the row optically lines up
+   with the comment text above it. */
+.md-comment__actions {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem;
+  margin-top: 0.35rem;
+  margin-left: -0.4rem;
+}
+
+.md-comment__reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-right: 0.1rem;
+}
+
+/* The row is always in the DOM (so reactions can be added to a comment that
+   had none) but stays hidden until somebody reacts. Stated explicitly rather
+   than relying on the UA's `[hidden]` rule losing to `display: flex`. */
+.md-comment__reactions[hidden] {
+  display: none;
+}
+
+.md-comment__reactions .md-comment__reaction {
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  font-size: 0.68rem;
+}
+
+/* -------------------------------------------------------- markdown output
+   Comment content is rendered through Material's `.md-typeset` so headings,
+   lists, quotes, code and tables are styled by the theme instead of by us.
+   Only *scale and vertical rhythm* are adjusted: the widget chrome is 14px, so
+   prose left at the article's 16px (with 32px headings) looked like page
+   sections rather than comments.
+
+   Selectors are scoped through `.md-typeset .md-comment` (0,3,0) so they also
+   outrank Material's direction-prefixed list rules. */
+.md-typeset .md-comment .md-comment__body {
+  font-size: 0.875em;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.md-typeset .md-comment .md-comment__body p {
+  margin: 0.5em 0;
+}
+
+.md-typeset .md-comment .md-comment__body h1,
+.md-typeset .md-comment .md-comment__body h2,
+.md-typeset .md-comment .md-comment__body h3,
+.md-typeset .md-comment .md-comment__body h4,
+.md-typeset .md-comment .md-comment__body h5,
+.md-typeset .md-comment .md-comment__body h6 {
+  margin: 0.9em 0 0.4em;
+  font-size: 1.15em;
+  line-height: 1.4;
+}
+
+.md-typeset .md-comment .md-comment__body h1 {
+  font-size: 1.35em;
+}
+
+.md-typeset .md-comment .md-comment__body h2 {
+  font-size: 1.2em;
+}
+
+.md-typeset .md-comment .md-comment__body > :first-child {
+  margin-top: 0;
+}
+
+.md-typeset .md-comment .md-comment__body > :last-child {
+  margin-bottom: 0;
+}
+
+/* Material sizes these in rem, so they would otherwise stay at the article's
+   scale while the surrounding prose shrinks. */
+.md-typeset .md-comment .md-comment__body table,
+.md-typeset .md-comment .md-comment__body pre,
+.md-typeset .md-comment .md-comment__body code {
+  font-size: 1em;
+}
+
+.md-typeset .md-comment .md-comment__body blockquote {
+  margin-left: 0;
+}
+
+/*
+ * List indentation inside a comment.
+ *
+ * Material zeroes list padding and moves the indent onto each `li` via
+ * `[dir="ltr"] .md-typeset ul li { margin-left: 1.25em }`. That rule also
+ * matches lists inside a comment, so the ladder is restated here from depth 1
+ * with a specificity that wins: markers sit inside the box, numbering starts
+ * at `decimal` even though `.md-comment__list` is an ancestor `<ul>`.
+ */
+.md-typeset .md-comment .md-comment__body ul,
+.md-typeset .md-comment .md-comment__body ol {
+  margin-left: 0;
+  padding-left: 1.4em;
+}
+
+.md-typeset .md-comment .md-comment__body li {
+  margin-left: 0;
+}
+
+.md-typeset .md-comment .md-comment__body ul {
+  list-style-type: disc;
+}
+
+.md-typeset .md-comment .md-comment__body ul ul {
+  list-style-type: circle;
+}
+
+.md-typeset .md-comment .md-comment__body ul ul ul {
+  list-style-type: square;
+}
+
+.md-typeset .md-comment .md-comment__body ol {
+  list-style-type: decimal;
+}
+
+.md-typeset .md-comment .md-comment__body ol ol {
+  list-style-type: lower-alpha;
+}
+
+.md-typeset .md-comment .md-comment__body ol ol ol {
+  list-style-type: lower-roman;
+}
+
+.md-comment__gone {
+  margin: 0;
+  color: var(--mkc-fg-lighter);
+  font-size: 0.7rem;
+  font-style: italic;
+}
+
+.md-comment__notice,
+.md-comment__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 1.6rem 1rem;
+  border: 0.05rem dashed var(--mkc-border);
+  border-radius: var(--mkc-radius);
+  color: var(--mkc-fg-lighter);
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.md-comment__more {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.9rem;
+}
+
+.md-comment__skeleton {
+  height: 4rem;
+  margin-bottom: 0.6rem;
+  border-radius: var(--mkc-radius);
+  background: linear-gradient(
+    90deg,
+    var(--mkc-surface) 25%,
+    rgba(128, 128, 128, 0.12) 37%,
+    var(--mkc-surface) 63%
+  );
+  background-size: 400% 100%;
+  animation: mkc-shimmer 1.4s ease infinite;
+}
+
+@keyframes mkc-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+/* ---------------------------------------------------------------- replies
+   A primary rail plus indentation shows nesting; the reply panel tint is
+   dropped as well, because a translucent block inside a translucent parent
+   reads as a card nested in a card. */
+.md-typeset .md-comment .md-comment__replies {
+  margin-top: 0.6rem;
+  padding-left: 0.75rem;
+  border-left: 0.1rem solid var(--mkc-primary);
+  border-radius: 0;
+  background: none;
+  gap: 0.2rem;
+}
+
+.md-typeset .md-comment .md-comment__replies .md-comment__item {
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--mkc-radius);
+  background: none;
+}
+
+/* ----------------------------------------------------------------- toast */
+.md-comment__toast {
+  position: fixed;
+  z-index: 1000;
+  bottom: 1.2rem;
+  left: 50%;
+  max-width: calc(100vw - 2rem);
+  padding: 0.5rem 1rem;
+  border-radius: var(--mkc-radius-overlay);
+  /* Inverted surface, exactly like Material's own snackbar. */
+  background: var(--md-default-fg-color, rgba(0, 0, 0, 0.87));
+  color: var(--md-default-bg-color, #ffffff);
+  box-shadow: var(--mkc-overlay);
+  font-size: 0.7rem;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 1rem);
+  transition: opacity 200ms, transform 200ms;
+}
+
+.md-comment__toast.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.md-comment__toast--error {
+  background: var(--mkc-danger);
+  color: #ffffff;
+}
+
+/* ---------------------------------------------------------- reaction tip
+   Names whoever reacted with a pill. One line with an ellipsis rather than a
+   wrapping block: this is a hint, not a panel.
+
+   Colours follow Material's own `.md-tooltip` — a normal surface plus a shadow
+   — NOT the inverted treatment of its snackbar. Using `--md-default-fg-color`
+   as the background turned this into a near-white bubble under the dark
+   palette, because that token is the *text* colour and flips with the scheme. */
+.md-comment__tip {
+  position: absolute;
+  z-index: 20;
+  max-width: min(20rem, calc(100vw - 3rem));
+  padding: 0.2rem 0.5rem;
+  border: 0.05rem solid var(--mkc-border);
+  border-radius: var(--mkc-radius-overlay);
+  background: var(--mkc-bg);
+  color: var(--mkc-fg);
+  box-shadow: var(--mkc-overlay);
+  font-size: 0.62rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Never intercept the pointer: the pill below still needs its own hover. */
+  pointer-events: none;
+  transform: translateY(calc(-100% - 0.3rem));
+}
+
+/* ------------------------------------------------------------- modifiers
+   Appearance options (`density`, `avatar_shape`) are applied as classes on the
+   widget root by the frontend. */
+.md-comment--square .md-comment__avatar {
+  border-radius: var(--mkc-radius);
+}
+
+/* `density: compact` tightens the vertical rhythm for long threads. Scoped to
+   (0,3,0) and declared after the base rules, so it wins the tie. */
+.md-typeset .md-comment--compact .md-comment__item {
+  padding: 0.5rem 0.6rem;
+}
+
+.md-typeset .md-comment--compact .md-comment__list,
+.md-typeset .md-comment--compact .md-comment__replies {
+  gap: 0.28rem;
+}
+
+.md-typeset .md-comment--compact .md-comment__replies {
+  margin-top: 0.35rem;
+}
+
+.md-comment--compact .md-comment__avatar {
+  width: 1.7rem;
+  height: 1.7rem;
+  font-size: 0.68rem;
+}
+
+/* ------------------------------------------------------------ responsive */
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .md-comment .md-comment__item {
+    gap: 0.5rem;
+    padding: 0.65rem 0.7rem;
+  }
+
+  /* Identity takes its own line, then the emoji trigger, hint and actions
+     share the next one; the buttons stretch so they stay easy to hit. */
+  .md-comment__identity {
+    flex: 1 1 100%;
+  }
+
+  .md-comment__spacer {
+    display: none;
+  }
+
+  .md-comment__bar .md-button {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .md-typeset .md-comment .md-comment__replies {
+    padding-left: 0.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .md-comment__skeleton {
+    animation: none;
+  }
+
+  .md-comment__item.is-highlight {
+    animation: none;
+    outline: 0.15rem solid var(--mkc-accent);
+  }
+
+  .md-comment__picker button:hover {
+    transform: none;
+  }
+}
+
+@media print {
+  .md-comment__form,
+  .md-comment__actions,
+  .md-comment__picker,
+  .md-comment__stats,
+  .md-comment__more {
+    display: none !important;
+  }
+}

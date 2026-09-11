@@ -1,0 +1,11 @@
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.27
+pydantic>=2.5,<3.0
+markdown>=3.5
+# Same Markdown stack the site is built with: `pymdown-extensions` is what
+# `mkdocs.yml` refers to as `pymdownx.*`, and pygments is its highlighting
+# backend. Rendering comments with the same extensions as the page is what keeps
+# the preview honest.
+pymdown-extensions>=10.0
+pygments>=2.15
+bleach>=6.1

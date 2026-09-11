@@ -1,0 +1,26 @@
+services:
+  comments-backend:
+    build: ./backend
+    image: mkdocs-comment-backend:latest
+    container_name: mkdocs-comments
+    restart: unless-stopped
+    ports:
+      # 只映射到回环地址：后端应由同机的反向代理访问，不该公网可达。
+      # 需要从其它机器直连时才改成 "8000:8000"，并让下面的
+      # MKC_TRUST_PROXY_HEADERS 保持为 "0"。
+      - "127.0.0.1:8000:8000"
+    environment:
+      MKC_DB_PATH: /data/comments.db
+      # 生产环境请改成你的站点域名（默认 * 表示允许任意来源）
+      MKC_CORS_ORIGINS: "http://127.0.0.1:8001"
+      # 后端由反向代理前置时才设为 "1"。因为端口已限制在回环上，这里默认关闭：
+      # 开启后 X-Forwarded-For 会被信任，而若端口同时直连可达，
+      # 任何人都能伪造来源 IP，进而绕过限流、伪造访客身份。
+      MKC_TRUST_PROXY_HEADERS: "0"
+      MKC_RATE_LIMIT_REQUESTS: "30"
+      MKC_RATE_LIMIT_WINDOW: "60"
+      # 管理员令牌：留空即禁用硬删除与管理脚本。生成方式：
+      #   python -c "import secrets; print(secrets.token_urlsafe(32))"
+      # MKC_ADMIN_TOKEN: "change-me"
+    volumes:
+      - ./data:/data

@@ -1,0 +1,88 @@
+site_name: 评论插件演示站
+site_description: mkdocs-comment-plugin 的本地演示
+site_url: http://127.0.0.1:8001/
+docs_dir: docs
+site_dir: site
+dev_addr: 127.0.0.1:8001 # 预览模式地址（默认值）
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: 切换到深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: 切换到浅色模式
+
+nav:
+  - 首页: index.md
+  - 使用指南: guide.md
+
+plugins:
+  - search
+  - comment:
+      # 后端服务地址；也可写成 http://127.0.0.1:8000/api/v1
+      api_base: http://127.0.0.1:8000/api/v1
+      title: 评论
+      page_selector: ".md-content__inner"
+      reactions: ["👍", "❤️", "😄", "🎉", "🚀"]
+      page_reactions: ["👍", "❤️", "😄", "🎉", "🚀"]
+      show_stats: true
+      show_page_reactions: true
+      count_views: true      # 每次刷新都会 +1（后端按 IP 限流防刷）
+      per_page: 10
+      # 昵称留空时显示的名字：anonymous 表示用 anonymous_name，
+      # ip 表示把访客 IP 当作昵称（旧行为），也可以直接写一个默认昵称。
+      default_author: anonymous
+      anonymous_name: 匿名用户   # 需与后端 MKC_ANONYMOUS_NAME 一致
+      require_author: false   # 设为 true 则必须手动填写昵称
+      allow_delete: true
+      # ---- 外观与交互 ----
+      # accent_color: "#7c4dff" # 强调色（留空则跟随主题主色）
+      # avatar_style: initial  # initial | none
+      # avatar_shape: circle   # circle | square
+      # density: comfortable   # comfortable | compact
+      # editor_rows: 4         # 输入框默认行数
+      # sort_order: newest     # newest | oldest
+      # time_style: relative   # relative | absolute
+      # remember_author: true  # 是否记住昵称
+      # reply_quote: true      # 回复时是否自动带 @提及
+      # 覆盖任意界面文案；设为空字符串则隐藏该元素
+      labels:
+        title: 评论
+        submit: 发表评论
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+
+extra_css:
+  - assets/extra.css

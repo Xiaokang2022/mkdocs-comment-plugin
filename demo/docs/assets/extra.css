@@ -1,0 +1,8 @@
+/* 演示站点的小幅美化，与评论插件无关 */
+:root {
+  --md-primary-fg-color: #4051b5;
+}
+
+.md-typeset h1 {
+  font-weight: 700;
+}

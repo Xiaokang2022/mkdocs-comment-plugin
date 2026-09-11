@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# 数据库
+*.db
+*.db-wal
+*.db-shm
+
+# MkDocs 构建产物
+demo/site/
+site/
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
